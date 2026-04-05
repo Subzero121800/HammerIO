@@ -14,120 +14,31 @@
   <a href="#"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Jetson%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square" alt="Python"></a>
   <a href="#"><img src="https://img.shields.io/badge/CUDA-12.x-76B900?style=flat-square&logo=nvidia" alt="CUDA"></a>
-  <a href="#"><img src="https://img.shields.io/badge/nvCOMP-GPU%20LZ4%2010GB%2Fs-76B900?style=flat-square" alt="nvCOMP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/nvCOMP-GPU%20LZ4-76B900?style=flat-square" alt="nvCOMP"></a>
   <a href="#"><img src="https://img.shields.io/badge/tests-325%20passing-brightgreen?style=flat-square" alt="Tests"></a>
-</p>
-
-<p align="center">
-  <a href="https://buymeacoffee.com/jcinc"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
 </p>
 
 ---
 
-**HammerIO** is a GPU-accelerated compression tool that automatically routes files to the fastest available hardware. Large files go to **nvCOMP GPU LZ4** (10+ GB/s decompression). Everything else goes to **CPU zstd** with parallel threading. No flags, no configuration — it just works.
-
-Built for **NVIDIA Jetson** edge devices but works on any CUDA-capable NVIDIA GPU.
+**HammerIO** is a GPU-accelerated compression tool that automatically routes files to the fastest available hardware. Large files go to **nvCOMP GPU LZ4** (10+ GB/s decompression). On macOS, it uses **Apple LZFSE** via the Accelerate framework. Everything else goes to **CPU zstd** with parallel threading. No flags, no configuration.
 
 ## Benchmarks
 
-Measured on Jetson AGX Orin 64GB, JetPack 6.2.2, CUDA 12.6, MAXN mode.
+Measured on Jetson AGX Orin 64GB, JetPack 6.2.2, CUDA 12.6, MAXN mode. Mixed realistic data — not synthetic patterns.
 
-| Workload | Method | Time | Throughput | Ratio |
-|---|---|---:|---:|---:|
-| 100MB mixed data (zstd-1) | CPU | 0.11s | 889 MB/s | 2.0x |
-| 100MB mixed data (zstd-9) | CPU | 0.33s | 304 MB/s | 2.0x |
-| 100MB mixed data (gzip-6) | CPU | 2.00s | 50 MB/s | 2.0x |
-| 96MB ML dataset (nvCOMP LZ4) | **GPU** | **0.014s** | **2,639 MB/s** | **3.7x** |
-| GPU LZ4 decompress | **GPU** | **0.003s** | **10,533 MB/s** | — |
-| 40MB video (zstd archive) | CPU | 0.12s | 332 MB/s | 1.0x |
-| 290KB text logs | CPU | 0.004s | 199 MB/s | 239x |
+| Workload | Method | Throughput | Ratio | Notes |
+|---|---|---:|---:|---|
+| 100MB mixed data | CPU zstd-1 | 842 MB/s | 2.0x | Baseline |
+| 100MB mixed data | CPU zstd-9 | 349 MB/s | 2.0x | Higher effort, same data |
+| 100MB mixed data | CPU gzip-6 | 50 MB/s | 2.0x | Compatibility mode |
+| 96MB ML dataset | **GPU nvCOMP LZ4** | **2,639 MB/s** | **3.7x** | CUDA-accelerated |
+| GPU LZ4 decompress | **GPU nvCOMP** | **10,533 MB/s** | — | 4.3x faster than CPU |
+| 3.2MB server logs | CPU zstd-3 | 410 MB/s | 3.5x | Realistic varied logs |
+| 5.4MB sensor CSV | CPU zstd-3 | 415 MB/s | 3.6x | 100K rows, varied values |
+| 20MB ML weights | CPU zstd-1 | 820 MB/s | 1.1x | Float32 tensors |
+| 40MB video (archive) | CPU zstd | 332 MB/s | 1.0x | Already compressed, passthrough |
 
-> Real numbers from `hammer benchmark --quick`. GPU nvCOMP is **4.3x faster** than CPU for decompression.
-
-## Install
-
-```bash
-pip install hammerio
-
-# Or from source
-git clone https://github.com/Subzero121800/HammerIO.git
-cd HammerIO
-./setup_venv.sh   # Creates venv with Jetson system packages (jtop, VPI)
-```
-
-## Quick Start
-
-```bash
-# Compress anything — routing is automatic
-hammer compress data.csv
-hammer compress ./dataset/ --quality fast
-hammer compress archive.tar --algo lz4
-
-# Decompress
-hammer decompress data.csv.zst
-hammer decompress archive.tar.lz4
-
-# Batch compress a directory
-hammer batch ./logs/ --workers 8
-
-# See what HammerIO would do (without compressing)
-hammer info --routes ./my_file.csv
-```
-
-## Python API
-
-```python
-import hammerio
-
-router = hammerio.JobRouter(quality="fast")
-job = router.route("dataset.csv")
-result = router.execute(job)
-
-print(f"{result.compression_ratio:.1f}x in {result.elapsed_seconds:.3f}s via {result.processor_used}")
-# → 69.2x in 0.015s via cpu_zstd
-```
-
-## Watch Daemon
-
-Drop-folder automation. Files dropped into `compress/` get compressed automatically, files in `decompress/` get decompressed. Ideal for edge pipelines.
-
-```bash
-hammer watch --watch-root ./pipeline --threshold-mb 500
-
-# Structure:
-# ./pipeline/
-#   compress/        ← drop files here
-#   decompress/      ← drop .zst/.lz4 files here
-#   compressed/      ← output appears here
-#   decompressed/    ← output appears here
-#   processed/       ← originals moved here after success
-```
-
-## Web Dashboard
-
-Real-time monitoring with GPU/CPU utilization, thermal zones, power rails, per-core CPU, and compression job history.
-
-```bash
-hammer webui             # http://localhost:5000
-hammer webui --port 8080 # custom port
-```
-
-Features: Hardware profile, live telemetry, file browser, quick compress/decompress, CLI console, architecture diagram, export to JSON/Markdown.
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `hammer compress` | Compress file or directory (auto GPU/CPU routing) |
-| `hammer decompress` | Decompress .zst, .lz4, .gz, .bz2 files |
-| `hammer batch` | Batch compress a directory with parallel workers |
-| `hammer watch` | Watch folders and auto-process dropped files |
-| `hammer benchmark` | Run GPU vs CPU benchmark suite |
-| `hammer info` | Hardware profile, routing decisions, telemetry |
-| `hammer config` | Show, save, or generate configuration |
-| `hammer monitor` | Live jtop-style terminal telemetry |
-| `hammer webui` | Launch web dashboard |
-| `hammer version` | Version and system info |
+> Real numbers from `hammer benchmark --quick`. Ratios depend on data entropy — text/CSV compresses well, random/pre-compressed data does not.
 
 ## Smart Routing
 
@@ -144,104 +55,134 @@ Routing Profile:
   Text Logs     → zstd (CPU, high ratio) # Best ratio
 ```
 
+On macOS Apple Silicon: `General → Apple LZFSE (Accelerate)` — hardware-optimized, faster than zstd on M-series.
+
 If the GPU path fails (OOM, driver issue), HammerIO falls back to CPU and logs why.
+
+## Install
+
+```bash
+pip install hammerio
+
+# Or from source
+git clone https://github.com/Subzero121800/HammerIO.git
+cd HammerIO
+./setup_venv.sh
+```
+
+Works on Jetson (ARM64), macOS (Apple Silicon), Linux (x86), and Windows.
+
+## Quick Start
+
+```bash
+# Compress anything — routing is automatic
+hammer compress data.csv
+hammer compress ./dataset/ --quality fast
+hammer compress archive.tar --algo lz4
+
+# Decompress
+hammer decompress data.csv.zst
+hammer decompress archive.tar.lz4
+
+# Batch compress a directory
+hammer batch ./logs/ --workers 8
+
+# See what HammerIO would do
+hammer info --routes ./my_file.csv
+
+# Hardware profile
+hammer info --hardware
+```
+
+**Python API:**
+
+```python
+import hammerio
+
+router = hammerio.JobRouter(quality="fast")
+job = router.route("dataset.csv")
+result = router.execute(job)
+print(f"{result.compression_ratio:.1f}x via {result.processor_used}")
+```
+
+## Watch Daemon
+
+Drop-folder automation for edge pipelines. Files dropped into `compress/` get compressed automatically.
+
+```bash
+hammer watch --watch-root ./pipeline --threshold-mb 500
+
+# ./pipeline/
+#   compress/        ← drop files here
+#   decompress/      ← drop .zst/.lz4 files here
+#   compressed/      ← output appears here
+#   decompressed/    ← output appears here
+#   processed/       ← originals moved here after success
+```
+
+GPU routing kicks in for files above the threshold. CPU handles the rest. Startup scan catches files dropped while the daemon was offline.
 
 ## Hardware Compatibility
 
-| Device | nvCOMP GPU | Status |
-|---|:---:|---|
-| **Jetson AGX Orin 64GB** | Yes | Primary target, fully tested |
-| Jetson AGX Orin 32GB | Yes | Supported |
-| Jetson Orin NX / Nano | Yes | Supported |
-| RTX 3000 / 4000 / 5000 | Yes | Supported |
-| Any CUDA GPU | Yes | Supported |
-| CPU-only (no NVIDIA) | — | CPU fallback (zstd/gzip/lz4) |
+| Device | Compression Engine | Status |
+|---|---|---|
+| **Jetson AGX Orin** | nvCOMP GPU LZ4 | Primary target, fully tested |
+| Jetson Orin NX / Nano | nvCOMP GPU LZ4 | Supported |
+| RTX 3000 / 4000 / 5000 | nvCOMP GPU LZ4 | Supported |
+| Any CUDA GPU | nvCOMP GPU LZ4 | Supported |
+| **macOS Apple Silicon** | Apple LZFSE (Accelerate) | M1/M2/M3/M4 |
+| CPU-only (no GPU) | zstd / gzip / lz4 | Universal fallback |
 
-## Right-Click Integration
-
-Compress/decompress from your file manager:
+## Web Dashboard
 
 ```bash
-./desktop-integration/install.sh        # Install
-./desktop-integration/install.sh --uninstall  # Remove
+hammer webui             # http://localhost:5000
 ```
 
-Works with Nautilus, Thunar, Nemo, and any file manager via .desktop files.
+Real-time monitoring: GPU/CPU utilization, thermal zones, power rails, per-core CPU bars, compression job history, file browser, quick compress/decompress, and a built-in CLI console.
 
-## Configuration
+## CLI Commands
 
-```bash
-hammer config --show          # View current config
-hammer config --generate      # Create hammerio.toml
-hammer config --save          # Persist to ~/.config/hammerio/
-```
-
-Key settings: `workers`, `gpu_threshold_mb`, `quality`, `output_format`.
-
-## Architecture
-
-```mermaid
-graph TD
-    A[Input: CLI / API / Web UI / Watch Daemon] --> B[File Profiler]
-    B --> C{File Size & Type}
-    C -->|Large files ≥500MB| D[nvCOMP GPU LZ4]
-    C -->|Datasets| D
-    C -->|General files| E[CPU zstd parallel]
-    C -->|Already compressed| F[Passthrough]
-    C -->|Text/logs| G[CPU zstd high ratio]
-    D --> H[Output + Metrics]
-    E --> H
-    F --> H
-    G --> H
-    D -.->|GPU failure| E
-```
+| Command | Description |
+|---------|-------------|
+| `hammer compress` | Compress file or directory (auto GPU/CPU routing) |
+| `hammer decompress` | Decompress .zst, .lz4, .lzfse, .gz, .bz2 files |
+| `hammer batch` | Batch compress a directory with parallel workers |
+| `hammer watch` | Watch folders and auto-process dropped files |
+| `hammer benchmark` | Run GPU vs CPU benchmark suite |
+| `hammer info` | Hardware profile, routing decisions, telemetry |
+| `hammer config` | Show, save, or generate configuration |
+| `hammer monitor` | Live terminal telemetry (jtop-style) |
+| `hammer webui` | Launch web dashboard |
+| `hammer version` | Version and system info |
 
 ## License
 
 ```
 Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
-
 Licensed under the Apache License, Version 2.0
 ```
 
 **Open source** for personal, educational, research, and internal business use.
 
 **Commercial licenses** available for redistribution, SaaS, and OEM embedding.
-See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for pricing.
 
-## Links
+| License | Price |
+|---------|-------|
+| Individual commercial | $199 one-time |
+| Organization | $999/year |
+| OEM / Embedded | Custom |
 
-- [Quick Start Guide](docs/quickstart.md)
-- [API Reference](docs/api.md)
-- [Jetson Deployment Guide](docs/jetson.md)
-- [Configuration Reference](docs/configuration.md)
-- [Contributing](CONTRIBUTING.md)
-- [Terms of Use](TERMS_OF_USE.md)
-- [Privacy Policy](PRIVACY_POLICY.md)
-- [Changelog](CHANGELOG.md)
+See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
 
-## Desktop Applications
-
-| Platform | GPU Engine | Download |
-|----------|-----------|----------|
-| **Jetson / Ubuntu ARM64** | nvCOMP CUDA | `.deb` package |
-| **macOS (Apple Silicon)** | Metal / Accelerate | `.app` bundle |
-| **Windows** | NVIDIA CUDA | Portable `.zip` |
-
-See [apps/README.md](apps/README.md) for build instructions.
-
-## Support
-
-If HammerIO saves you time, consider supporting development:
-
-<p align="center">
-  <a href="https://buymeacoffee.com/jcinc"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=jcinc&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy Me A Coffee"></a>
-</p>
+**Contact:** [contact@resilientmindai.com](mailto:contact@resilientmindai.com) | [resilientmindai.com](https://resilientmindai.com)
 
 ---
 
 <p align="center">
-  <strong>ResilientMind AI</strong> | <a href="https://resilientmindai.com">resilientmindai.com</a> | <strong>Joseph C McGinty Jr</strong><br>
-  <em>GPU where it matters. CPU where it doesn't.</em><br>
-  <sub>Apache 2.0 | <a href="COMMERCIAL_LICENSE.md">Commercial Licenses Available</a></sub>
+  <a href="docs/quickstart.md">Quick Start</a> · <a href="docs/api.md">API Reference</a> · <a href="docs/jetson.md">Jetson Guide</a> · <a href="docs/configuration.md">Configuration</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <strong>ResilientMind AI</strong> | <a href="https://resilientmindai.com">resilientmindai.com</a> | <strong>Joseph C McGinty Jr</strong>
 </p>
