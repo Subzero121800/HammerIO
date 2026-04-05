@@ -1,0 +1,16 @@
+HammerIO
+Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
+
+This product includes software developed by ResilientMind AI.
+Licensed under the Apache License, Version 2.0.
+
+Third-Party Notices:
+- FFmpeg (LGPL/GPL) — used for video/audio encoding
+- GStreamer (LGPL) — used for Jetson hardware video encoding
+- NVIDIA CUDA Toolkit — used for GPU acceleration
+- NVIDIA VPI — used for GPU image processing
+- jetson-stats/jtop (AGPL-3.0) — used for Jetson telemetry
+- zstandard (BSD) — used for CPU compression
+- typer (MIT) — used for CLI
+- rich (MIT) — used for terminal output
+- Flask (BSD) — used for web dashboard

@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hammerio"
+version = "1.0.0"
+description = "GPU where it matters. CPU where it doesn't. Zero configuration."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Joseph C McGinty Jr", email = "contact@resilientmindai.com"},
+]
+keywords = ["cuda", "compression", "jetson", "nvenc", "gpu", "media", "edge-ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: System :: Archiving :: Compression",
+    "Operating System :: POSIX :: Linux",
+]
+
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "zstandard>=0.21.0",
+    "numpy>=1.24.0",
+    "psutil>=5.9.0",
+    "toml>=0.10.0",
+    "aiofiles>=23.0",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "opencv-python>=4.8.0",
+    "pynvml>=11.5.0",
+]
+ml = [
+    "torch>=2.0.0",
+]
+web = [
+    "flask>=3.0.0",
+    "flask-socketio>=5.3.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.4.0",
+]
+all = ["hammerio[gpu,ml,web,dev]"]
+
+[project.scripts]
+hammer = "hammerio.cli.main:app"
+
+[project.urls]
+Homepage = "https://resilientmindai.com"
+Documentation = "https://github.com/Subzero121800/HammerIO/tree/main/docs"
+Repository = "https://github.com/Subzero121800/HammerIO"
+Issues = "https://github.com/Subzero121800/HammerIO/issues"
+
+[tool.setuptools.packages.find]
+include = ["hammerio*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"

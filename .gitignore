@@ -1,0 +1,71 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+*.log
+
+# Secrets / credentials
+.env
+.env.*
+credentials.json
+
+# Build artifacts & temporary files
+build_logs/
+hammerio.egg-info/
+
+# Media / test artifacts (large files)
+*.mp4
+*.mp4.lz4
+*.mp4.zst
+
+# GitHub Actions (no workflow automation)
+.github/
+
+# Docker (not for public push)
+docker/
+
+# Dev config files
+.pre-commit-config.yaml
+.devcontainer/
+
+# Example / scratch files
+examples/
+test.md
+*.svg
+!docs/*.svg
+
+# Scripts (internal use)
+setup_venv.sh
+start.sh
+start_webui.py

@@ -1,0 +1,122 @@
+{
+  "platform": "NVIDIA Jetson AGX Orin Developer Kit",
+  "cuda_version": "12.6",
+  "timestamp": "2026-04-05T04:35:09",
+  "results": [
+    {
+      "test_name": "video_encode",
+      "workload": "1280x720_5s",
+      "method": "cpu",
+      "processor": "CPU libx264",
+      "input_size_bytes": 212905,
+      "output_size_bytes": 127497,
+      "elapsed_seconds": 0.9619874490017537,
+      "compression_ratio": 1.6698824286061633,
+      "throughput_mbps": 0.21106515531483042,
+      "notes": ""
+    },
+    {
+      "test_name": "video_encode",
+      "workload": "1280x720_5s",
+      "method": "gpu",
+      "processor": "GPU h264_nvenc",
+      "input_size_bytes": 212905,
+      "output_size_bytes": 0,
+      "elapsed_seconds": 0.2353157200050191,
+      "compression_ratio": 0,
+      "throughput_mbps": 0.8628494106987069,
+      "notes": "FAILED"
+    },
+    {
+      "test_name": "video_encode",
+      "workload": "1280x720_5s",
+      "method": "gpu",
+      "processor": "GPU hevc_nvenc",
+      "input_size_bytes": 212905,
+      "output_size_bytes": 0,
+      "elapsed_seconds": 0.23503612499916926,
+      "compression_ratio": 0,
+      "throughput_mbps": 0.8638758417889604,
+      "notes": "FAILED"
+    },
+    {
+      "test_name": "bulk_compress",
+      "workload": "100MB_compressible",
+      "method": "cpu",
+      "processor": "zstd_level1",
+      "input_size_bytes": 104857600,
+      "output_size_bytes": 9867,
+      "elapsed_seconds": 0.04727408700273372,
+      "compression_ratio": 10627.100435796088,
+      "throughput_mbps": 2115.323771228354,
+      "notes": ""
+    },
+    {
+      "test_name": "bulk_compress",
+      "workload": "100MB_compressible",
+      "method": "cpu",
+      "processor": "zstd_level3",
+      "input_size_bytes": 104857600,
+      "output_size_bytes": 9867,
+      "elapsed_seconds": 0.06164247499691555,
+      "compression_ratio": 10627.100435796088,
+      "throughput_mbps": 1622.2580291431154,
+      "notes": ""
+    },
+    {
+      "test_name": "bulk_compress",
+      "workload": "100MB_compressible",
+      "method": "cpu",
+      "processor": "zstd_level9",
+      "input_size_bytes": 104857600,
+      "output_size_bytes": 9891,
+      "elapsed_seconds": 0.14724907699564938,
+      "compression_ratio": 10601.31432615509,
+      "throughput_mbps": 679.1214046316542,
+      "notes": ""
+    },
+    {
+      "test_name": "bulk_compress",
+      "workload": "100MB_compressible",
+      "method": "cpu",
+      "processor": "gzip_level6",
+      "input_size_bytes": 104857600,
+      "output_size_bytes": 407101,
+      "elapsed_seconds": 0.8407321699996828,
+      "compression_ratio": 257.5714626100157,
+      "throughput_mbps": 118.94394382462815,
+      "notes": ""
+    },
+    {
+      "test_name": "image_batch",
+      "workload": "50_images_resize50pct",
+      "method": "cpu",
+      "processor": "opencv_cpu",
+      "input_size_bytes": 13777701,
+      "output_size_bytes": 2044897,
+      "elapsed_seconds": 0.2937391769955866,
+      "compression_ratio": 6.737601453765153,
+      "throughput_mbps": 170.21903755368405,
+      "notes": "170.2 images/sec"
+    },
+    {
+      "test_name": "audio_encode",
+      "workload": "5_wav_to_mp3",
+      "method": "cpu",
+      "processor": "libmp3lame",
+      "input_size_bytes": 4410390,
+      "output_size_bytes": 1207075,
+      "elapsed_seconds": 1.095490461004374,
+      "compression_ratio": 3.653782904956196,
+      "throughput_mbps": 3.8394452695450414,
+      "notes": ""
+    }
+  ],
+  "summary": {
+    "total_tests": 9,
+    "gpu_tests": 0,
+    "cpu_tests": 7,
+    "gpu_available": true,
+    "nvenc_available": false
+  }
+}
