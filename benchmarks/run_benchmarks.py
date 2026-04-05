@@ -339,6 +339,35 @@ def benchmark_bulk_data(tmpdir: Path, quick: bool = False) -> list[BenchmarkResu
         throughput_mbps=throughput,
     ))
 
+    # Apple LZFSE (macOS only)
+    try:
+        from hammerio.encoders.apple import is_available, compress_buffer, COMPRESSION_LZFSE, COMPRESSION_LZ4 as APPLE_LZ4
+        if is_available():
+            for algo_name, algo_id in [("Apple LZFSE", COMPRESSION_LZFSE), ("Apple LZ4", APPLE_LZ4)]:
+                console.print(f"  {algo_name}...", end=" ")
+                with open(src, "rb") as f:
+                    data = f.read()
+                start = time.perf_counter()
+                compressed = compress_buffer(data, algo_id)
+                elapsed = time.perf_counter() - start
+                out_size = len(compressed)
+                ratio = input_size / out_size if out_size > 0 else 0
+                throughput = (input_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                console.print(f"[green]OK[/green] {elapsed:.2f}s, {ratio:.2f}x, {throughput:.1f} MB/s")
+                results.append(BenchmarkResult(
+                    test_name="bulk_compress",
+                    workload=f"{size_mb}MB_mixed",
+                    method="apple",
+                    processor=algo_name.lower().replace(" ", "_"),
+                    input_size_bytes=input_size,
+                    output_size_bytes=out_size,
+                    elapsed_seconds=elapsed,
+                    compression_ratio=ratio,
+                    throughput_mbps=throughput,
+                ))
+    except ImportError:
+        pass
+
     return results
 
 

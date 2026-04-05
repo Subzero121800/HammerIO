@@ -123,6 +123,15 @@ class JobRouter:
         self._encoders[CompressionMode.CPU_GZIP] = general
         self._encoders[CompressionMode.CPU_BZIP2] = general
 
+        # Apple Silicon Accelerate framework (macOS)
+        if self.hardware.apple_compression:
+            try:
+                from hammerio.encoders.apple import AppleEncoder
+                self._encoders[CompressionMode.APPLE_LZFSE] = AppleEncoder(self.hardware)
+                logger.info("Apple LZFSE encoder registered")
+            except Exception:
+                pass
+
         # Media encoders registered only if explicitly needed (advanced use)
         try:
             from hammerio.encoders.video import VideoEncoder
@@ -249,6 +258,7 @@ class JobRouter:
             nvenc_available=nvenc_available,
             nvcomp_available=hw.has_nvcomp,
             vpi_available=hw.has_vpi,
+            apple_available=hw.apple_compression,
             target_quality=self.quality,
         )
 
@@ -299,6 +309,9 @@ class JobRouter:
             "gzip": ".gz",
             "bzip2": ".bz2",
             "lz4": ".lz4",
+            "lzfse": ".lzfse",
+            "zlib": ".zz",
+            "lzma": ".lzma",
         }
         ext = algo_ext_map.get(algo)
         if ext:

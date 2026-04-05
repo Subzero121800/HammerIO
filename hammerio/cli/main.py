@@ -136,6 +136,10 @@ def decompress(
             if ext == ".hammer":
                 encoder = BulkEncoder(hw)
                 out = encoder.decompress(input_p, Path(output) if output else None)
+            elif ext in (".lzfse", ".hmac"):
+                from hammerio.encoders.apple import AppleEncoder
+                encoder = AppleEncoder(hw)
+                out = encoder.decompress(input_p, Path(output) if output else None)
             elif ext in (".zst", ".gz", ".bz2", ".lz4"):
                 encoder = GeneralEncoder(hw)
                 out = encoder.decompress(input_p, Path(output) if output else None)

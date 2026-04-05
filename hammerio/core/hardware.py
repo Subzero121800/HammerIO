@@ -28,6 +28,7 @@ class GpuVendor(Enum):
 
 class PlatformType(Enum):
     JETSON = "jetson"
+    APPLE_SILICON = "apple_silicon"
     DESKTOP = "desktop"
     UNKNOWN = "unknown"
 
@@ -119,6 +120,7 @@ class HardwareProfile:
     thermal_celsius: Optional[float]
     jetpack_version: str = ""
     l4t_version: str = ""
+    apple_compression: bool = False  # macOS libcompression (LZFSE/LZ4/ZLIB)
 
     @property
     def has_cuda(self) -> bool:
@@ -150,12 +152,20 @@ class HardwareProfile:
     def routing_summary(self) -> dict[str, str]:
         """Return recommended compression processor for each file type."""
         routes: dict[str, str] = {}
-        gpu_comp = "nvCOMP LZ4 (GPU)" if self.has_nvcomp else None
+        if self.has_nvcomp:
+            gpu_comp = "nvCOMP LZ4 (GPU)"
+        elif self.apple_compression:
+            gpu_comp = "Apple LZFSE (Accelerate)"
+        else:
+            gpu_comp = None
         routes["large_files"] = gpu_comp or "zstd parallel (CPU)"
         routes["datasets"] = gpu_comp or "zstd streaming (CPU)"
-        routes["general"] = "zstd parallel (CPU)"
+        if self.apple_compression:
+            routes["general"] = "Apple LZFSE (Accelerate)"
+        else:
+            routes["general"] = "zstd parallel (CPU)"
         routes["archives"] = "passthrough (already compressed)"
-        routes["text_logs"] = "zstd (CPU, high ratio)"
+        routes["text_logs"] = gpu_comp or "zstd (CPU, high ratio)"
         return routes
 
 
@@ -572,6 +582,11 @@ def detect_hardware() -> HardwareProfile:
     if is_jetson:
         platform_type = PlatformType.JETSON
         platform_name = _get_jetson_model()
+    elif platform.system() == "Darwin" and arch == "arm64":
+        platform_type = PlatformType.APPLE_SILICON
+        # Detect chip model
+        chip = _run_cmd(["sysctl", "-n", "machdep.cpu.brand_string"]) or "Apple Silicon"
+        platform_name = f"macOS {chip}"
     elif arch == "x86_64":
         platform_type = PlatformType.DESKTOP
         platform_name = "Desktop/Server x86_64"
@@ -581,6 +596,15 @@ def detect_hardware() -> HardwareProfile:
 
     cuda_device = detect_cuda_device()
     gpu_vendor = GpuVendor.NVIDIA if cuda_device else GpuVendor.NONE
+
+    # Detect Apple compression (macOS only)
+    has_apple_compression = False
+    if platform.system() == "Darwin":
+        try:
+            from hammerio.encoders.apple import is_available
+            has_apple_compression = is_available()
+        except ImportError:
+            pass
 
     # CPU info
     cpu_cores = psutil.cpu_count(logical=True) or os.cpu_count() or 1
@@ -610,6 +634,7 @@ def detect_hardware() -> HardwareProfile:
         thermal_celsius=detect_thermal(),
         jetpack_version=_get_jetpack_version() if is_jetson else "",
         l4t_version=_get_l4t_version() if is_jetson else "",
+        apple_compression=has_apple_compression,
     )
 
 
@@ -664,6 +689,10 @@ def format_hardware_report(profile: Optional[HardwareProfile] = None) -> str:
         lines.append(f"  nvCOMP:       Available ({algos})")
     else:
         lines.append("  nvCOMP:       Not available")
+
+    # Apple compression
+    if profile.apple_compression:
+        lines.append("  Apple Accel:  Available (LZFSE, LZ4, ZLIB, LZMA)")
 
     # VPI
     if profile.vpi.available:

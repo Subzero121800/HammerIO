@@ -38,6 +38,7 @@ class CompressionMode(Enum):
     GPU_NVCOMP = "gpu_nvcomp"    # Bulk data via nvCOMP
     GPU_VPI = "gpu_vpi"          # Image batch via VPI
     GPU_FFMPEG = "gpu_ffmpeg"    # Audio/video via FFmpeg CUDA
+    APPLE_LZFSE = "apple_lzfse"  # macOS Accelerate framework
     CPU_ZSTD = "cpu_zstd"        # General CPU compression
     CPU_GZIP = "cpu_gzip"        # Compatibility mode
     CPU_BZIP2 = "cpu_bzip2"      # Max ratio CPU
@@ -273,6 +274,7 @@ def recommend_compression(
     nvenc_available: bool = True,
     nvcomp_available: bool = False,
     vpi_available: bool = False,
+    apple_available: bool = False,
     target_quality: str = "balanced",
 ) -> CompressionRecommendation:
     """Recommend optimal compression strategy for a file profile.
@@ -377,7 +379,16 @@ def recommend_compression(
             estimated_ratio=5.0 if profile.estimated_entropy < 5 else 2.5,
         )
 
-    # DEFAULT — CPU zstd
+    # DEFAULT — Apple LZFSE on macOS, CPU zstd elsewhere
+    if apple_available:
+        algo = "lzfse" if target_quality != "fast" else "lz4"
+        return CompressionRecommendation(
+            mode=CompressionMode.APPLE_LZFSE,
+            algorithm=algo,
+            reason=f"General file ({profile.size_human}) → Apple {algo.upper()} (Accelerate)",
+            estimated_ratio=2.5 if algo == "lzfse" else 1.5,
+        )
+
     algo = "zstd"
     if target_quality == "fast":
         algo = "lz4"
