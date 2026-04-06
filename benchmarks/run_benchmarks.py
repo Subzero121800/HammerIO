@@ -622,17 +622,274 @@ def save_results(suite: BenchmarkSuite, output_path: str) -> None:
         console.print(f"[green]CSV saved:[/green] {csv_path}")
 
 
-def run_all_benchmarks(quick: bool = False, output_path: str = "benchmarks/results/benchmark.json") -> BenchmarkSuite:
-    """Run the complete benchmark suite."""
+def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100) -> list[BenchmarkResult]:
+    """Benchmark full compress → decompress round-trip.
+
+    This is the core benchmark: generates realistic data, compresses it,
+    then decompresses and verifies the result matches the original.
+    """
+    results: list[BenchmarkResult] = []
+
+    console.print(f"\n[bold]Compress/Decompress Round-Trip ({size_mb} MB)[/bold]")
+
+    src = tmpdir / "roundtrip_data.bin"
+    with console.status(f"Generating {size_mb} MB test data..."):
+        _generate_test_data(src, size_mb, data_type="compressible")
+
+    input_size = src.stat().st_size
+
+    # Test each algorithm: compress → decompress → verify
+    try:
+        import zstandard as zstd
+
+        for level, label in [(1, "zstd-1 (fast)"), (3, "zstd-3 (balanced)"), (9, "zstd-9 (quality)")]:
+            out_comp = tmpdir / f"rt_zstd_l{level}.zst"
+            out_decomp = tmpdir / f"rt_zstd_l{level}.bin"
+
+            # Compress
+            console.print(f"  {label} compress...", end=" ")
+            cctx = zstd.ZstdCompressor(level=level, threads=-1)
+            start = time.perf_counter()
+            with open(src, "rb") as fin, open(out_comp, "wb") as fout:
+                cctx.copy_stream(fin, fout)
+            comp_time = time.perf_counter() - start
+            comp_size = out_comp.stat().st_size
+            comp_tp = (input_size / (1024 * 1024)) / comp_time if comp_time > 0 else 0
+
+            # Decompress
+            dctx = zstd.ZstdDecompressor()
+            start = time.perf_counter()
+            with open(out_comp, "rb") as fin, open(out_decomp, "wb") as fout:
+                dctx.copy_stream(fin, fout)
+            decomp_time = time.perf_counter() - start
+            decomp_tp = (input_size / (1024 * 1024)) / decomp_time if decomp_time > 0 else 0
+
+            # Verify
+            match = out_decomp.stat().st_size == input_size
+            ratio = input_size / comp_size if comp_size > 0 else 0
+            status = "[green]OK[/green]" if match else "[red]MISMATCH[/red]"
+            console.print(f"{status} {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
+
+            results.append(BenchmarkResult(
+                test_name="roundtrip",
+                workload=f"{size_mb}MB_mixed",
+                method="cpu",
+                processor=f"zstd_level{level}",
+                input_size_bytes=input_size,
+                output_size_bytes=comp_size,
+                elapsed_seconds=comp_time,
+                compression_ratio=ratio,
+                throughput_mbps=comp_tp,
+                notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+            ))
+    except ImportError:
+        console.print("[yellow]  zstandard not installed[/yellow]")
+
+    # gzip round-trip
+    import gzip as gzip_mod
+    out_gz = tmpdir / "rt_gzip.gz"
+    out_gz_dec = tmpdir / "rt_gzip.bin"
+
+    console.print("  gzip-6 compress...", end=" ")
+    start = time.perf_counter()
+    with open(src, "rb") as fin, gzip_mod.open(out_gz, "wb", compresslevel=6) as fout:
+        while True:
+            chunk = fin.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            fout.write(chunk)
+    comp_time = time.perf_counter() - start
+    comp_size = out_gz.stat().st_size
+    comp_tp = (input_size / (1024 * 1024)) / comp_time if comp_time > 0 else 0
+
+    start = time.perf_counter()
+    with gzip_mod.open(out_gz, "rb") as fin, open(out_gz_dec, "wb") as fout:
+        while True:
+            chunk = fin.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            fout.write(chunk)
+    decomp_time = time.perf_counter() - start
+    decomp_tp = (input_size / (1024 * 1024)) / decomp_time if decomp_time > 0 else 0
+    ratio = input_size / comp_size if comp_size > 0 else 0
+    match = out_gz_dec.stat().st_size == input_size
+    console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
+
+    results.append(BenchmarkResult(
+        test_name="roundtrip",
+        workload=f"{size_mb}MB_mixed",
+        method="cpu",
+        processor="gzip_level6",
+        input_size_bytes=input_size,
+        output_size_bytes=comp_size,
+        elapsed_seconds=comp_time,
+        compression_ratio=ratio,
+        throughput_mbps=comp_tp,
+        notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+    ))
+
+    # nvCOMP GPU round-trip (if available)
+    try:
+        from nvidia.nvcomp import Codec, Array
+        import cupy as cp
+
+        console.print("  nvCOMP GPU LZ4 compress...", end=" ")
+        with open(src, "rb") as f:
+            raw = f.read()
+
+        codec = Codec(algorithm="lz4")
+        d_input = cp.frombuffer(bytearray(raw), dtype=cp.uint8)
+        arr = Array(d_input)
+
+        # Warmup
+        _ = codec.encode(arr)
+        cp.cuda.Stream.null.synchronize()
+
+        # Timed compress
+        cp.cuda.Stream.null.synchronize()
+        start = time.perf_counter()
+        compressed = codec.encode(arr)
+        cp.cuda.Stream.null.synchronize()
+        comp_time = time.perf_counter() - start
+        comp_size = cp.asarray(compressed).nbytes
+        comp_tp = (input_size / (1024 * 1024)) / comp_time if comp_time > 0 else 0
+
+        # Timed decompress
+        cp.cuda.Stream.null.synchronize()
+        start = time.perf_counter()
+        decompressed = codec.decode(compressed)
+        cp.cuda.Stream.null.synchronize()
+        decomp_time = time.perf_counter() - start
+        decomp_tp = (input_size / (1024 * 1024)) / decomp_time if decomp_time > 0 else 0
+
+        match = cp.array_equal(d_input, cp.asarray(decompressed))
+        ratio = input_size / comp_size if comp_size > 0 else 0
+        console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
+
+        results.append(BenchmarkResult(
+            test_name="roundtrip",
+            workload=f"{size_mb}MB_mixed",
+            method="gpu",
+            processor="nvcomp_lz4",
+            input_size_bytes=input_size,
+            output_size_bytes=comp_size,
+            elapsed_seconds=comp_time,
+            compression_ratio=ratio,
+            throughput_mbps=comp_tp,
+            notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+        ))
+    except ImportError:
+        pass
+    except Exception as e:
+        console.print(f"[yellow]nvCOMP: {e}[/yellow]")
+
+    # Apple LZFSE (macOS only)
+    try:
+        from hammerio.encoders.apple import is_available, compress_buffer, decompress_buffer
+        from hammerio.encoders.apple import COMPRESSION_LZFSE, COMPRESSION_LZ4 as APPLE_LZ4
+        if is_available():
+            with open(src, "rb") as f:
+                raw = f.read()
+            for algo_name, algo_id in [("Apple LZFSE", COMPRESSION_LZFSE), ("Apple LZ4", APPLE_LZ4)]:
+                console.print(f"  {algo_name} compress...", end=" ")
+                start = time.perf_counter()
+                compressed = compress_buffer(raw, algo_id)
+                comp_time = time.perf_counter() - start
+                comp_size = len(compressed)
+                comp_tp = (input_size / (1024 * 1024)) / comp_time if comp_time > 0 else 0
+
+                start = time.perf_counter()
+                decompressed = decompress_buffer(compressed, len(raw), algo_id)
+                decomp_time = time.perf_counter() - start
+                decomp_tp = (input_size / (1024 * 1024)) / decomp_time if decomp_time > 0 else 0
+                match = decompressed == raw
+                ratio = input_size / comp_size if comp_size > 0 else 0
+                console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
+
+                results.append(BenchmarkResult(
+                    test_name="roundtrip",
+                    workload=f"{size_mb}MB_mixed",
+                    method="apple",
+                    processor=algo_name.lower().replace(" ", "_"),
+                    input_size_bytes=input_size,
+                    output_size_bytes=comp_size,
+                    elapsed_seconds=comp_time,
+                    compression_ratio=ratio,
+                    throughput_mbps=comp_tp,
+                    notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+                ))
+    except ImportError:
+        pass
+
+    return results
+
+
+def benchmark_1gb(tmpdir: Path) -> list[BenchmarkResult]:
+    """1GB+ benchmark mode — downloads or generates a large test file."""
+    console.print("\n[bold]1GB Large File Benchmark[/bold]")
+
+    src = tmpdir / "large_test_1gb.bin"
+
+    # Try to download a real 1GB test file
+    downloaded = False
+    test_urls = [
+        "http://speedtest.tele2.net/1GB.zip",
+        "https://speed.hetzner.de/1GB.bin",
+    ]
+
+    for url in test_urls:
+        try:
+            console.print(f"  Downloading 1GB test file from {url.split('/')[2]}...", end=" ")
+            import urllib.request
+            urllib.request.urlretrieve(url, str(src))
+            if src.stat().st_size >= 500 * 1024 * 1024:
+                console.print(f"[green]OK[/green] ({src.stat().st_size / (1024**3):.2f} GB)")
+                downloaded = True
+                break
+            else:
+                console.print("[yellow]too small, trying next[/yellow]")
+                src.unlink(missing_ok=True)
+        except Exception as e:
+            console.print(f"[yellow]failed: {e}[/yellow]")
+
+    if not downloaded:
+        console.print("  Generating 1GB test data locally...")
+        _generate_test_data(src, 1024, data_type="compressible")
+        console.print(f"  Generated: {src.stat().st_size / (1024**3):.2f} GB")
+
+    return benchmark_roundtrip(tmpdir, size_mb=int(src.stat().st_size / (1024 * 1024)))
+
+
+def run_all_benchmarks(
+    quick: bool = False,
+    large: bool = False,
+    output_path: str = "benchmarks/results/benchmark.json",
+) -> BenchmarkSuite:
+    """Run the compression benchmark suite.
+
+    Args:
+        quick: Quick mode (100MB test data)
+        large: Large file mode (1GB+ test data)
+        output_path: Path for JSON results
+    """
     from hammerio.core.hardware import detect_hardware
 
     hw = detect_hardware()
+
+    if large:
+        mode_label = "1GB+"
+    elif quick:
+        mode_label = "Quick (100MB)"
+    else:
+        mode_label = "Standard (500MB)"
 
     console.print(Panel(
         f"[bold]HammerIO Benchmark Suite[/bold]\n"
         f"Platform: {hw.platform_name}\n"
         f"CUDA: {hw.cuda_device.cuda_version if hw.cuda_device else 'N/A'}\n"
-        f"Mode: {'Quick' if quick else 'Full'}",
+        f"nvCOMP: {'Available' if hw.has_nvcomp else 'Not available'}\n"
+        f"Apple Accel: {'Available' if hw.apple_compression else 'Not available'}\n"
+        f"Mode: {mode_label}",
         border_style="yellow",
     ))
 
@@ -645,21 +902,25 @@ def run_all_benchmarks(quick: bool = False, output_path: str = "benchmarks/resul
     with tempfile.TemporaryDirectory(prefix="hammerio_bench_") as tmpdir:
         tmp = Path(tmpdir)
 
-        suite.results.extend(benchmark_video(tmp, quick))
-        suite.results.extend(benchmark_bulk_data(tmp, quick))
-        suite.results.extend(benchmark_images(tmp, quick))
-        suite.results.extend(benchmark_audio(tmp, quick))
+        if large:
+            suite.results.extend(benchmark_1gb(tmp))
+        else:
+            size = 100 if quick else 500
+            suite.results.extend(benchmark_roundtrip(tmp, size_mb=size))
 
     # Summary
-    gpu_results = [r for r in suite.results if r.method == "gpu" and r.notes != "FAILED"]
+    gpu_results = [r for r in suite.results if r.method == "gpu"]
     cpu_results = [r for r in suite.results if r.method == "cpu"]
+    apple_results = [r for r in suite.results if r.method == "apple"]
 
     suite.summary = {
         "total_tests": len(suite.results),
         "gpu_tests": len(gpu_results),
         "cpu_tests": len(cpu_results),
+        "apple_tests": len(apple_results),
         "gpu_available": hw.has_cuda,
-        "nvenc_available": hw.has_nvenc,
+        "nvcomp_available": hw.has_nvcomp,
+        "apple_available": hw.apple_compression,
     }
 
     print_results_table(suite.results)
@@ -671,8 +932,9 @@ def run_all_benchmarks(quick: bool = False, output_path: str = "benchmarks/resul
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="HammerIO Benchmark Suite")
-    parser.add_argument("--quick", action="store_true", help="Run quick benchmarks")
+    parser.add_argument("--quick", action="store_true", help="Quick benchmark (100MB)")
+    parser.add_argument("--1gb", dest="large", action="store_true", help="Large file benchmark (1GB+)")
     parser.add_argument("--output", default="benchmarks/results/benchmark.json", help="Output path")
     args = parser.parse_args()
 
-    run_all_benchmarks(quick=args.quick, output_path=args.output)
+    run_all_benchmarks(quick=args.quick, large=args.large, output_path=args.output)

@@ -251,12 +251,19 @@ def batch(
 @app.command()
 def benchmark(
     output: str = typer.Option("benchmarks/results/benchmark.json", "--output", "-o"),
-    quick: bool = typer.Option(False, "--quick", help="Run quick benchmark (smaller datasets)"),
+    quick: bool = typer.Option(False, "--quick", help="Quick benchmark (100MB test data)"),
+    large: bool = typer.Option(False, "--1gb", help="Large file benchmark (1GB+ download or generate)"),
 ) -> None:
-    """Run the HammerIO benchmark suite."""
+    """Run the HammerIO compression benchmark suite.
+
+    Modes:
+      --quick  100MB mixed data (fast, ~30 seconds)
+      --1gb    1GB+ data from download or generated (thorough, ~5 minutes)
+      default  500MB mixed data (~2 minutes)
+    """
     console.print(Panel(
         "[bold]HammerIO Benchmark Suite[/bold]\n"
-        "Testing GPU vs CPU performance across workloads",
+        "Compress → Decompress → Verify round-trip",
         border_style="yellow",
     ))
 
@@ -270,7 +277,7 @@ def benchmark(
         if not Path(output).is_absolute():
             output = str(Path(_project_root) / output)
         from benchmarks.run_benchmarks import run_all_benchmarks
-        results = run_all_benchmarks(quick=quick, output_path=output)
+        results = run_all_benchmarks(quick=quick, large=large, output_path=output)
         console.print(f"\n[green]Results saved to:[/green] {output}")
     except ImportError as ie:
         console.print(f"[red]Benchmark module not found:[/red] {ie}")
