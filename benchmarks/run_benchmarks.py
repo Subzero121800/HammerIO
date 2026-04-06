@@ -986,7 +986,19 @@ def run_all_benchmarks(
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
     )
 
-    with tempfile.TemporaryDirectory(prefix="hammerio_bench_") as tmpdir:
+    # Use NVMe for temp files if available (faster I/O, more space)
+    nvme_tmp = Path("/mnt/nvme/tmp") if Path("/mnt/nvme").exists() else None
+    home_tmp = Path.home() / ".cache" / "hammerio" / "tmp"
+    if nvme_tmp:
+        nvme_tmp.mkdir(parents=True, exist_ok=True)
+        tmpdir_base = str(nvme_tmp)
+    elif home_tmp.parent.exists():
+        home_tmp.mkdir(parents=True, exist_ok=True)
+        tmpdir_base = str(home_tmp)
+    else:
+        tmpdir_base = None  # system default /tmp
+
+    with tempfile.TemporaryDirectory(prefix="hammerio_bench_", dir=tmpdir_base) as tmpdir:
         tmp = Path(tmpdir)
 
         if huge:
