@@ -49,7 +49,9 @@ class CompressionMode(Enum):
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".wmv", ".m4v", ".ts", ".mpg", ".mpeg"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp", ".gif", ".raw", ".cr2", ".nef"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".aiff"}
-ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".zst", ".lz4", ".hammer"}
+# .tar is NOT compressed — it's just a container, so it's not in this set
+COMPRESSED_ARCHIVE_EXTENSIONS = {".zip", ".gz", ".bz2", ".xz", ".7z", ".rar", ".zst", ".lz4", ".hammer"}
+ARCHIVE_EXTENSIONS = COMPRESSED_ARCHIVE_EXTENSIONS | {".tar"}
 DATASET_EXTENSIONS = {".csv", ".parquet", ".arrow", ".hdf5", ".h5", ".npy", ".npz", ".tfrecord", ".pt", ".safetensors"}
 DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt"}
 
@@ -206,7 +208,9 @@ def estimate_entropy(path: Path, sample_size: int = 65536) -> float:
 
 def is_already_compressed(path: Path, category: FileCategory) -> bool:
     """Check if file is already in a compressed format."""
-    if category == FileCategory.ARCHIVE:
+    ext = path.suffix.lower()
+    # .tar is a container, NOT compressed
+    if category == FileCategory.ARCHIVE and ext != ".tar":
         return True
     # Most video/audio formats use lossy compression
     ext = path.suffix.lower()
