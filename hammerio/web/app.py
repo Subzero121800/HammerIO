@@ -358,6 +358,23 @@ def _register_routes(app: Flask) -> None:
     def api_jobs() -> Any:
         return jsonify(_job_history[-100:])
 
+    @app.route("/api/jobs/all")
+    def api_jobs_all() -> Any:
+        return jsonify(_job_history)
+
+    @app.route("/api/jobs/clear", methods=["POST"])
+    def api_jobs_clear() -> Any:
+        """Clear job history."""
+        data = request.json or {}
+        scope = data.get("scope", "recent")  # "recent" or "all"
+        if scope == "all":
+            _job_history.clear()
+        else:
+            # Clear last 100 (recent view)
+            del _job_history[-100:]
+        _save_job_history()
+        return jsonify({"status": "cleared", "scope": scope, "remaining": len(_job_history)})
+
     @app.route("/api/compress", methods=["POST"])
     def api_compress() -> Any:
         data = request.json or {}
@@ -1184,16 +1201,44 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- Jobs -->
+        <!-- Recent Jobs (collapsible) -->
         <div class="card full-width">
-            <h2>Recent Jobs <button class="export-btn" onclick="exportJobs()">Export JSON</button></h2>
-            <table class="job-table">
-                <thead><tr>
-                    <th>File</th><th>Input</th><th>Output</th><th>Ratio</th>
-                    <th>Time</th><th>Speed</th><th>Processor</th><th>Status</th>
-                </tr></thead>
-                <tbody id="job-tbody"></tbody>
-            </table>
+            <h2 onclick="toggleSection('recent-jobs')" style="cursor:pointer">
+                <span id="recent-jobs-arrow">&#9660;</span> Recent Jobs
+                <span style="float:right;display:flex;gap:6px">
+                    <button class="export-btn" onclick="event.stopPropagation();clearJobs('recent')">Clear</button>
+                    <button class="export-btn" onclick="event.stopPropagation();exportJobs()">Export JSON</button>
+                </span>
+            </h2>
+            <div id="recent-jobs" style="">
+                <table class="job-table">
+                    <thead><tr>
+                        <th>File</th><th>Input</th><th>Output</th><th>Ratio</th>
+                        <th>Time</th><th>Speed</th><th>Processor</th><th>Status</th>
+                    </tr></thead>
+                    <tbody id="job-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- All Jobs (collapsible, starts collapsed) -->
+        <div class="card full-width">
+            <h2 onclick="toggleSection('all-jobs')" style="cursor:pointer">
+                <span id="all-jobs-arrow">&#9654;</span> All Jobs
+                <span style="float:right;display:flex;gap:6px">
+                    <button class="export-btn" onclick="event.stopPropagation();clearJobs('all')">Clear</button>
+                    <button class="export-btn" onclick="event.stopPropagation();exportAllJobs()">Export JSON</button>
+                </span>
+            </h2>
+            <div id="all-jobs" style="display:none">
+                <table class="job-table">
+                    <thead><tr>
+                        <th>File</th><th>Input</th><th>Output</th><th>Ratio</th>
+                        <th>Time</th><th>Speed</th><th>Processor</th><th>Status</th>
+                    </tr></thead>
+                    <tbody id="all-job-tbody"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -1572,22 +1617,65 @@ DASHBOARD_HTML = """
             .catch(e => { resultDiv.innerHTML = `<span style="color:#f85149">${e}</span>`; });
         }
 
+        function makeJobRow(data) {
+            const filename = data.input_path ? data.input_path.split('/').pop() : '?';
+            return '<tr>' +
+                '<td>' + filename + '</td>' +
+                '<td>' + formatBytes(data.input_size || 0) + '</td>' +
+                '<td>' + formatBytes(data.output_size || 0) + '</td>' +
+                '<td>' + (data.ratio ? data.ratio.toFixed(2) + 'x' : '-') + '</td>' +
+                '<td>' + (data.elapsed_s ? data.elapsed_s.toFixed(2) + 's' : '-') + '</td>' +
+                '<td>' + (data.throughput_mbps ? data.throughput_mbps.toFixed(1) + ' MB/s' : '-') + '</td>' +
+                '<td style="color:#3fb950">' + (data.processor || '-') + '</td>' +
+                '<td>' + (data.status || '-') + '</td>' +
+                '</tr>';
+        }
+
         function addJobRow(data) {
             const tbody = document.getElementById('job-tbody');
-            const row = document.createElement('tr');
-            const filename = data.input_path ? data.input_path.split('/').pop() : '?';
-            row.innerHTML = `
-                <td>${filename}</td>
-                <td>${formatBytes(data.input_size)}</td>
-                <td>${formatBytes(data.output_size)}</td>
-                <td>${data.ratio ? data.ratio.toFixed(2) + 'x' : '-'}</td>
-                <td>${data.elapsed_s ? data.elapsed_s.toFixed(2) + 's' : '-'}</td>
-                <td>${data.throughput_mbps ? data.throughput_mbps.toFixed(1) + ' MB/s' : '-'}</td>
-                <td style="color:#3fb950">${data.processor || '-'}</td>
-                <td>${data.status || '-'}</td>
-            `;
-            tbody.insertBefore(row, tbody.firstChild);
+            tbody.insertAdjacentHTML('afterbegin', makeJobRow(data));
             if (tbody.children.length > 50) tbody.removeChild(tbody.lastChild);
+            // Also add to all-jobs
+            const allTbody = document.getElementById('all-job-tbody');
+            allTbody.insertAdjacentHTML('afterbegin', makeJobRow(data));
+        }
+
+        function toggleSection(id) {
+            const el = document.getElementById(id);
+            const arrow = document.getElementById(id + '-arrow');
+            if (el.style.display === 'none') {
+                el.style.display = '';
+                arrow.innerHTML = '&#9660;';
+            } else {
+                el.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        }
+
+        function clearJobs(scope) {
+            if (!confirm('Clear ' + scope + ' job history?')) return;
+            fetch('/api/jobs/clear', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({scope: scope})
+            }).then(r => r.json()).then(data => {
+                if (scope === 'all') {
+                    document.getElementById('job-tbody').innerHTML = '';
+                    document.getElementById('all-job-tbody').innerHTML = '';
+                } else {
+                    document.getElementById('job-tbody').innerHTML = '';
+                }
+            });
+        }
+
+        function exportAllJobs() {
+            fetch('/api/jobs/all').then(r => r.json()).then(jobs => {
+                const blob = new Blob([JSON.stringify(jobs, null, 2)], {type: 'application/json'});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'hammerio-all-jobs.json';
+                a.click();
+            });
         }
 
         // ─── REST API Fallback Loading ───────────────────────────────────
@@ -1678,9 +1766,17 @@ DASHBOARD_HTML = """
             document.getElementById('total-power').textContent = (jtop.power?.total_mw || 0).toFixed(0) + ' mW';
         }).catch(() => {});
 
-        // Fetch existing jobs on load
+        // Fetch existing jobs on load — recent (last 100) + all
         fetch('/api/jobs').then(r => r.json()).then(jobs => {
-            jobs.reverse().forEach(addJobRow);
+            jobs.reverse().forEach(j => {
+                document.getElementById('job-tbody').insertAdjacentHTML('beforeend', makeJobRow(j));
+            });
+        });
+        fetch('/api/jobs/all').then(r => r.json()).then(jobs => {
+            const allTbody = document.getElementById('all-job-tbody');
+            jobs.reverse().forEach(j => {
+                allTbody.insertAdjacentHTML('beforeend', makeJobRow(j));
+            });
         });
 
         // ─── Polling — refresh telemetry every 2 seconds ─────────────────
