@@ -2311,6 +2311,7 @@ CONSOLE_HTML = """
         <div class="nav-links">
             <a href="/">Dashboard</a>
             <a href="/console" class="active">Console</a>
+            <a href="/architecture">Architecture</a>
         </div>
         <div style="color:var(--text-secondary);font-size:11px;text-align:right">
             ResilientMind AI<br>Joseph C McGinty Jr
