@@ -252,13 +252,15 @@ def batch(
 def benchmark(
     output: str = typer.Option("benchmarks/results/benchmark.json", "--output", "-o"),
     quick: bool = typer.Option(False, "--quick", help="Quick benchmark (100MB test data)"),
-    large: bool = typer.Option(False, "--1gb", help="Large file benchmark (1GB+ download or generate)"),
+    large: bool = typer.Option(False, "--1gb", help="Large file benchmark (1GB download)"),
+    huge: bool = typer.Option(False, "--10gb", help="Huge file benchmark (10GB generated)"),
 ) -> None:
     """Run the HammerIO compression benchmark suite.
 
     Modes:
       --quick  100MB mixed data (fast, ~30 seconds)
-      --1gb    1GB+ data from download or generated (thorough, ~5 minutes)
+      --1gb    1GB data from download (thorough, ~5 minutes)
+      --10gb   10GB generated data (stress test, ~20 minutes)
       default  500MB mixed data (~2 minutes)
     """
     console.print(Panel(
@@ -277,7 +279,7 @@ def benchmark(
         if not Path(output).is_absolute():
             output = str(Path(_project_root) / output)
         from benchmarks.run_benchmarks import run_all_benchmarks
-        results = run_all_benchmarks(quick=quick, large=large, output_path=output)
+        results = run_all_benchmarks(quick=quick, large=large, huge=huge, output_path=output)
         console.print(f"\n[green]Results saved to:[/green] {output}")
     except ImportError as ie:
         console.print(f"[red]Benchmark module not found:[/red] {ie}")
@@ -572,19 +574,20 @@ def version() -> None:
 def main_callback(
     ctx: typer.Context,
     one_gb: bool = typer.Option(False, "--1gb", help="Shortcut for 'benchmark --1gb'"),
+    ten_gb: bool = typer.Option(False, "--10gb", help="Shortcut for 'benchmark --10gb'"),
 ) -> None:
     """HammerIO — GPU where it matters. CPU where it doesn't."""
-    if one_gb:
-        # Direct call instead of ctx.invoke to avoid Typer option resolution issues
-        from hammerio.cli.main import _run_benchmark_1gb
-        _run_benchmark_1gb()
+    if one_gb or ten_gb:
+        from hammerio.cli.main import _run_benchmark_sized
+        _run_benchmark_sized(large=one_gb, huge=ten_gb)
         raise typer.Exit()
 
 
-def _run_benchmark_1gb() -> None:
-    """Run the 1GB benchmark directly."""
+def _run_benchmark_sized(large: bool = False, huge: bool = False) -> None:
+    """Run a sized benchmark directly (bypasses Typer option resolution)."""
+    label = "10GB" if huge else "1GB"
     console.print(Panel(
-        "[bold]HammerIO Benchmark Suite[/bold]\nCompress \u2192 Decompress \u2192 Verify round-trip",
+        f"[bold]HammerIO Benchmark Suite ({label})[/bold]\nCompress \u2192 Decompress \u2192 Verify round-trip",
         border_style="yellow",
     ))
     try:
@@ -594,8 +597,8 @@ def _run_benchmark_1gb() -> None:
             _sys.path.insert(0, _project_root)
         output = str(Path(_project_root) / "benchmarks/results/benchmark.json")
         from benchmarks.run_benchmarks import run_all_benchmarks
-        run_all_benchmarks(quick=False, large=True, output_path=output)
-        console.print(f"\\n[green]Results saved to:[/green] {output}")
+        run_all_benchmarks(quick=False, large=large, huge=huge, output_path=output)
+        console.print(f"\n[green]Results saved to:[/green] {output}")
     except ImportError as ie:
         console.print(f"[red]Benchmark module not found:[/red] {ie}")
     except Exception as e:

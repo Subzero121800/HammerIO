@@ -866,9 +866,28 @@ def benchmark_1gb(tmpdir: Path) -> list[BenchmarkResult]:
     return benchmark_roundtrip(tmpdir, source_file=src)
 
 
+def benchmark_10gb(tmpdir: Path) -> list[BenchmarkResult]:
+    """10GB stress test — generated locally, tests sustained throughput."""
+    console.print("\n[bold]10GB Stress Test Benchmark[/bold]")
+
+    src = tmpdir / "stress_test_10gb.bin"
+    size_gb = 10
+    size_mb = size_gb * 1024
+
+    console.print(f"  Generating {size_gb} GB test data (mixed content)...")
+    console.print("  This will take a minute...")
+
+    _generate_test_data(src, size_mb, data_type="compressible")
+    actual_gb = src.stat().st_size / (1024 ** 3)
+    console.print(f"  Generated: {actual_gb:.2f} GB")
+
+    return benchmark_roundtrip(tmpdir, source_file=src)
+
+
 def run_all_benchmarks(
     quick: bool = False,
     large: bool = False,
+    huge: bool = False,
     output_path: str = "benchmarks/results/benchmark.json",
 ) -> BenchmarkSuite:
     """Run the compression benchmark suite.
@@ -882,8 +901,10 @@ def run_all_benchmarks(
 
     hw = detect_hardware()
 
-    if large:
-        mode_label = "1GB+"
+    if huge:
+        mode_label = "10GB Stress Test"
+    elif large:
+        mode_label = "1GB"
     elif quick:
         mode_label = "Quick (100MB)"
     else:
@@ -908,7 +929,9 @@ def run_all_benchmarks(
     with tempfile.TemporaryDirectory(prefix="hammerio_bench_") as tmpdir:
         tmp = Path(tmpdir)
 
-        if large:
+        if huge:
+            suite.results.extend(benchmark_10gb(tmp))
+        elif large:
             suite.results.extend(benchmark_1gb(tmp))
         else:
             size = 100 if quick else 500
@@ -939,8 +962,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="HammerIO Benchmark Suite")
     parser.add_argument("--quick", action="store_true", help="Quick benchmark (100MB)")
-    parser.add_argument("--1gb", dest="large", action="store_true", help="Large file benchmark (1GB+)")
+    parser.add_argument("--1gb", dest="large", action="store_true", help="Large file benchmark (1GB)")
+    parser.add_argument("--10gb", dest="huge", action="store_true", help="10GB stress test")
     parser.add_argument("--output", default="benchmarks/results/benchmark.json", help="Output path")
     args = parser.parse_args()
 
-    run_all_benchmarks(quick=args.quick, large=args.large, output_path=args.output)
+    run_all_benchmarks(quick=args.quick, large=args.large, huge=args.huge, output_path=args.output)
