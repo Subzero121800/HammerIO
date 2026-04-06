@@ -568,10 +568,38 @@ def version() -> None:
         raise typer.Exit(1)
 
 
-@app.callback()
-def main_callback() -> None:
+@app.callback(invoke_without_command=True)
+def main_callback(
+    ctx: typer.Context,
+    one_gb: bool = typer.Option(False, "--1gb", help="Shortcut for 'benchmark --1gb'"),
+) -> None:
     """HammerIO — GPU where it matters. CPU where it doesn't."""
-    pass
+    if one_gb:
+        # Direct call instead of ctx.invoke to avoid Typer option resolution issues
+        from hammerio.cli.main import _run_benchmark_1gb
+        _run_benchmark_1gb()
+        raise typer.Exit()
+
+
+def _run_benchmark_1gb() -> None:
+    """Run the 1GB benchmark directly."""
+    console.print(Panel(
+        "[bold]HammerIO Benchmark Suite[/bold]\nCompress \u2192 Decompress \u2192 Verify round-trip",
+        border_style="yellow",
+    ))
+    try:
+        import sys as _sys
+        _project_root = str(Path(__file__).resolve().parent.parent.parent)
+        if _project_root not in _sys.path:
+            _sys.path.insert(0, _project_root)
+        output = str(Path(_project_root) / "benchmarks/results/benchmark.json")
+        from benchmarks.run_benchmarks import run_all_benchmarks
+        run_all_benchmarks(quick=False, large=True, output_path=output)
+        console.print(f"\\n[green]Results saved to:[/green] {output}")
+    except ImportError as ie:
+        console.print(f"[red]Benchmark module not found:[/red] {ie}")
+    except Exception as e:
+        console.print(f"[red]Benchmark error:[/red] {e}")
 
 
 if __name__ == "__main__":
