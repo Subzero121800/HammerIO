@@ -941,11 +941,7 @@ def benchmark_10gb(tmpdir: Path) -> list[BenchmarkResult]:
         console.print(f"  Generated: {cached.stat().st_size / (1024**3):.2f} GB")
         console.print(f"  Cached at: {cached}")
 
-    # Copy to tmpdir (symlink to avoid double disk usage)
-    src = tmpdir / "stress_test_10gb.bin"
-    os.symlink(str(cached), str(src))
-
-    return benchmark_roundtrip(tmpdir, source_file=src)
+    return benchmark_roundtrip(tmpdir, source_file=cached)
 
 
 def run_all_benchmarks(
