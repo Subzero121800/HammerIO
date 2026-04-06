@@ -622,19 +622,25 @@ def save_results(suite: BenchmarkSuite, output_path: str) -> None:
         console.print(f"[green]CSV saved:[/green] {csv_path}")
 
 
-def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100) -> list[BenchmarkResult]:
+def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[Path] = None) -> list[BenchmarkResult]:
     """Benchmark full compress → decompress round-trip.
 
-    This is the core benchmark: generates realistic data, compresses it,
-    then decompresses and verifies the result matches the original.
+    Args:
+        tmpdir: Temp directory for output files.
+        size_mb: Size of test data to generate (ignored if source_file provided).
+        source_file: Use this file instead of generating test data.
     """
     results: list[BenchmarkResult] = []
 
-    console.print(f"\n[bold]Compress/Decompress Round-Trip ({size_mb} MB)[/bold]")
-
-    src = tmpdir / "roundtrip_data.bin"
-    with console.status(f"Generating {size_mb} MB test data..."):
-        _generate_test_data(src, size_mb, data_type="compressible")
+    if source_file and source_file.exists():
+        src = source_file
+        size_mb = int(src.stat().st_size / (1024 * 1024))
+        console.print(f"\n[bold]Compress/Decompress Round-Trip ({size_mb} MB — {src.name})[/bold]")
+    else:
+        console.print(f"\n[bold]Compress/Decompress Round-Trip ({size_mb} MB)[/bold]")
+        src = tmpdir / "roundtrip_data.bin"
+        with console.status(f"Generating {size_mb} MB test data..."):
+            _generate_test_data(src, size_mb, data_type="compressible")
 
     input_size = src.stat().st_size
 
@@ -857,7 +863,7 @@ def benchmark_1gb(tmpdir: Path) -> list[BenchmarkResult]:
         _generate_test_data(src, 1024, data_type="compressible")
         console.print(f"  Generated: {src.stat().st_size / (1024**3):.2f} GB")
 
-    return benchmark_roundtrip(tmpdir, size_mb=int(src.stat().st_size / (1024 * 1024)))
+    return benchmark_roundtrip(tmpdir, source_file=src)
 
 
 def run_all_benchmarks(
