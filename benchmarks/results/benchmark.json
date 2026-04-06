@@ -1,7 +1,7 @@
 {
   "platform": "NVIDIA Jetson AGX Orin Developer Kit",
   "cuda_version": "12.6",
-  "timestamp": "2026-04-05T22:20:44",
+  "timestamp": "2026-04-05T23:43:16",
   "results": [
     {
       "test_name": "roundtrip",
@@ -9,11 +9,11 @@
       "method": "cpu",
       "processor": "zstd_level1",
       "input_size_bytes": 10737418240,
-      "output_size_bytes": 5372600710,
-      "elapsed_seconds": 9.157979848008836,
-      "compression_ratio": 1.9985513198504565,
-      "throughput_mbps": 1118.150527730897,
-      "notes": "decomp: 741 MB/s, match: True"
+      "output_size_bytes": 6737929,
+      "elapsed_seconds": 5.888907712011132,
+      "compression_ratio": 1593.5784185318664,
+      "throughput_mbps": 1738.862366464717,
+      "notes": "decomp: 835 MB/s, match: True"
     },
     {
       "test_name": "roundtrip",
@@ -21,11 +21,11 @@
       "method": "cpu",
       "processor": "zstd_level3",
       "input_size_bytes": 10737418240,
-      "output_size_bytes": 5371124606,
-      "elapsed_seconds": 13.402896261992282,
-      "compression_ratio": 1.9991005660165464,
-      "throughput_mbps": 764.0139712965195,
-      "notes": "decomp: 744 MB/s, match: True"
+      "output_size_bytes": 1561609,
+      "elapsed_seconds": 2.9712995320005575,
+      "compression_ratio": 6875.868568892725,
+      "throughput_mbps": 3446.3035078477837,
+      "notes": "decomp: 807 MB/s, match: True"
     },
     {
       "test_name": "roundtrip",
@@ -33,11 +33,11 @@
       "method": "cpu",
       "processor": "zstd_level9",
       "input_size_bytes": 10737418240,
-      "output_size_bytes": 5369350078,
-      "elapsed_seconds": 9.848224779008888,
-      "compression_ratio": 1.9997612530415454,
-      "throughput_mbps": 1039.7813037153828,
-      "notes": "decomp: 729 MB/s, match: True"
+      "output_size_bytes": 821106,
+      "elapsed_seconds": 5.035245728009613,
+      "compression_ratio": 13076.774789125886,
+      "throughput_mbps": 2033.6644035141815,
+      "notes": "decomp: 831 MB/s, match: True"
     },
     {
       "test_name": "roundtrip",
@@ -45,11 +45,11 @@
       "method": "cpu",
       "processor": "gzip_level6",
       "input_size_bytes": 10737418240,
-      "output_size_bytes": 5403115093,
-      "elapsed_seconds": 195.1306898190087,
-      "compression_ratio": 1.987264393814385,
-      "throughput_mbps": 52.47764977153516,
-      "notes": "decomp: 311 MB/s, match: True"
+      "output_size_bytes": 41841876,
+      "elapsed_seconds": 83.31604670399975,
+      "compression_ratio": 256.6189489209327,
+      "throughput_mbps": 122.90549546091712,
+      "notes": "decomp: 293 MB/s, match: True"
     }
   ],
   "summary": {

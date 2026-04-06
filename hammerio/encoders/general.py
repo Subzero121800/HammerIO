@@ -63,14 +63,16 @@ _EXTENSION_MAP: dict[str, str] = {
     "gzip": ".gz",
     "bzip2": ".bz2",
     "lz4": ".lz4",
+    "zip": ".zip",
 }
 
-# Tar archive extension mapping per algorithm
+# Tar archive extension mapping per algorithm (zip doesn't use tar)
 _TAR_EXTENSION_MAP: dict[str, str] = {
     "zstd": ".tar.zst",
     "gzip": ".tar.gz",
     "bzip2": ".tar.bz2",
     "lz4": ".tar.lz4",
+    "zip": ".zip",  # zip is its own container — no tar wrapper
 }
 
 
@@ -224,7 +226,18 @@ class GeneralEncoder:
             quality,
         )
 
-        if is_dir:
+        if is_dir and algorithm == "zip":
+            # zip has its own container — no tar wrapper needed
+            import zipfile
+            level = {"fast": 1, "balanced": 6, "quality": 9, "lossless": 9}.get(quality, 6)
+            with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=level) as zf:
+                for root, _dirs, files in os.walk(input_path):
+                    for fname in files:
+                        fpath = Path(root) / fname
+                        arcname = fpath.relative_to(input_path)
+                        zf.write(str(fpath), str(arcname))
+            self._report_progress(1, 1, progress_callback, job_id)
+        elif is_dir:
             self._compress_directory(
                 input_path, output_path, algorithm, quality,
                 progress_callback, job_id,
@@ -301,7 +314,13 @@ class GeneralEncoder:
             input_path, output_path, algorithm, is_tar,
         )
 
-        if is_tar:
+        if algorithm == "zip":
+            import zipfile
+            output_path.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(input_path, "r") as zf:
+                zf.extractall(output_path)
+            self._report_progress(1, 1, progress_callback, job_id)
+        elif is_tar:
             self._decompress_tar(
                 input_path, output_path, algorithm,
                 progress_callback, job_id,
@@ -412,6 +431,12 @@ class GeneralEncoder:
                 input_path, output_path, quality, total_size,
                 progress_callback, job_id,
             )
+        elif algorithm == "zip":
+            import zipfile
+            level = {"fast": 1, "balanced": 6, "quality": 9, "lossless": 9}.get(quality, 6)
+            with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=level) as zf:
+                zf.write(str(input_path), input_path.name)
+            self._report_progress(1, 1, progress_callback, job_id)
 
     def _compress_file_zstd(
         self,

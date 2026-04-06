@@ -56,7 +56,7 @@ def compress(
     input_path: str = typer.Argument(..., help="File or directory to compress"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output path"),
     mode: CompressMode = typer.Option(CompressMode.auto, "--mode", "-m", help="Processing mode"),
-    algo: Optional[str] = typer.Option(None, "--algo", "-a", help="Force algorithm (zstd, lz4, h264_nvenc, etc.)"),
+    algo: Optional[str] = typer.Option(None, "--algo", "-a", help="Force algorithm (zstd, lz4, gzip, zip, bzip2)"),
     quality: QualityPreset = typer.Option(QualityPreset.balanced, "--quality", "-q", help="Quality preset"),
     workers: int = typer.Option(4, "--workers", "-w", help="Parallel workers for batch"),
 ) -> None:
@@ -140,7 +140,7 @@ def decompress(
                 from hammerio.encoders.apple import AppleEncoder
                 encoder = AppleEncoder(hw)
                 out = encoder.decompress(input_p, Path(output) if output else None)
-            elif ext in (".zst", ".gz", ".bz2", ".lz4"):
+            elif ext in (".zst", ".gz", ".bz2", ".lz4", ".zip"):
                 encoder = GeneralEncoder(hw)
                 out = encoder.decompress(input_p, Path(output) if output else None)
             else:

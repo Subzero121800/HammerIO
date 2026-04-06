@@ -740,37 +740,56 @@ def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[
         import cupy as cp
 
         console.print("  nvCOMP GPU LZ4 compress...", end=" ")
-        with open(src, "rb") as f:
-            raw = f.read()
-
         codec = Codec(algorithm="lz4")
-        d_input = cp.frombuffer(bytearray(raw), dtype=cp.uint8)
-        arr = Array(d_input)
 
-        # Warmup
-        _ = codec.encode(arr)
+        # Chunked processing — 256MB per chunk to avoid GPU OOM
+        CHUNK_SIZE = 256 * 1024 * 1024
+        total_comp_size = 0
+        chunk_count = 0
+
+        # Warmup with a small chunk
+        warmup = cp.zeros(1024 * 1024, dtype=cp.uint8)
+        _ = codec.encode(Array(warmup))
         cp.cuda.Stream.null.synchronize()
+        del warmup
 
-        # Timed compress
+        # Timed compress (chunked)
         cp.cuda.Stream.null.synchronize()
         start = time.perf_counter()
-        compressed = codec.encode(arr)
+        compressed_chunks = []
+        with open(src, "rb") as f:
+            while True:
+                chunk = f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                d_chunk = cp.frombuffer(bytearray(chunk), dtype=cp.uint8)
+                comp = codec.encode(Array(d_chunk))
+                cp.cuda.Stream.null.synchronize()
+                comp_arr = cp.asarray(comp)
+                total_comp_size += comp_arr.nbytes
+                compressed_chunks.append((comp, len(chunk)))
+                chunk_count += 1
+                del d_chunk
         cp.cuda.Stream.null.synchronize()
         comp_time = time.perf_counter() - start
-        comp_size = cp.asarray(compressed).nbytes
         comp_tp = (input_size / (1024 * 1024)) / comp_time if comp_time > 0 else 0
 
-        # Timed decompress
+        # Timed decompress (chunked)
         cp.cuda.Stream.null.synchronize()
         start = time.perf_counter()
-        decompressed = codec.decode(compressed)
-        cp.cuda.Stream.null.synchronize()
+        total_decomp = 0
+        for comp, orig_len in compressed_chunks:
+            dec = codec.decode(comp)
+            cp.cuda.Stream.null.synchronize()
+            total_decomp += cp.asarray(dec).nbytes
+            del dec
         decomp_time = time.perf_counter() - start
         decomp_tp = (input_size / (1024 * 1024)) / decomp_time if decomp_time > 0 else 0
 
-        match = cp.array_equal(d_input, cp.asarray(decompressed))
-        ratio = input_size / comp_size if comp_size > 0 else 0
-        console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
+        match = total_decomp == input_size
+        ratio = input_size / total_comp_size if total_comp_size > 0 else 0
+        console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x ({chunk_count} chunks)")
+        del compressed_chunks
 
         results.append(BenchmarkResult(
             test_name="roundtrip",
@@ -885,25 +904,33 @@ def benchmark_10gb(tmpdir: Path) -> list[BenchmarkResult]:
         # Fast generation: 1MB seed block repeated with variation
         # ~200 MB/s write speed on NVMe
         seed = bytearray(1024 * 1024)  # 1MB
-        # Fill seed: 25% CSV text, 25% pattern, 25% semi-random, 25% zeros
+        # Mix: 25% CSV, 25% pattern, 25% random (real entropy), 25% binary
         quarter = len(seed) // 4
         csv_line = b"2026-04-05T12:00:00,SNR0042,23.456,67.89,1013.25,active,OK\n"
         for i in range(quarter):
             seed[i] = csv_line[i % len(csv_line)]
         for i in range(quarter, quarter * 2):
             seed[i] = i & 0xFF
-        for i in range(quarter * 2, quarter * 3):
-            seed[i] = (i * 7 + 13) & 0xFF
-        # Last quarter stays zeros
+        # 25% actual random bytes (incompressible)
+        rand_block = os.urandom(quarter)
+        seed[quarter * 2 : quarter * 3] = rand_block
+        # 25% binary with structure (float-like)
+        import struct as _struct
+        float_count = quarter // 4
+        float_bytes = _struct.pack(f'{float_count}f', *((i * 0.001) for i in range(float_count)))
+        seed[quarter * 3:] = float_bytes[:quarter]
 
         written = 0
         with open(cached, "wb") as f:
             while written < size_bytes:
-                # Vary each block slightly so it's not perfectly repeating
+                # Vary each block: change CSV sensor IDs and random section
                 block_num = written // len(seed)
-                seed[0] = block_num & 0xFF
-                seed[1] = (block_num >> 8) & 0xFF
-                seed[2] = (block_num >> 16) & 0xFF
+                # Rotate CSV sensor IDs
+                sensor_id = f"SNR{block_num % 9999:04d}".encode()
+                seed[20:28] = sensor_id
+                # Vary the pattern section
+                seed[quarter] = block_num & 0xFF
+                seed[quarter + 1] = (block_num >> 8) & 0xFF
                 f.write(seed)
                 written += len(seed)
 

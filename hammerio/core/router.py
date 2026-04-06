@@ -309,6 +309,7 @@ class JobRouter:
             "gzip": ".gz",
             "bzip2": ".bz2",
             "lz4": ".lz4",
+            "zip": ".zip",
             "lzfse": ".lzfse",
             "zlib": ".zz",
             "lzma": ".lzma",

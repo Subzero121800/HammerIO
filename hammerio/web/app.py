@@ -1052,7 +1052,7 @@ DASHBOARD_HTML = """
                 <div class="metric"><span class="label">GPU</span><span class="value" id="hw-gpu">-</span></div>
                 <div class="metric"><span class="label">CUDA</span><span class="value" id="hw-cuda">-</span></div>
                 <div class="metric"><span class="label">GPU Memory</span><span class="value" id="hw-gpu-mem">-</span></div>
-                <div class="metric"><span class="label">NVENC</span><span class="value" id="hw-nvenc">-</span></div>
+                <!-- NVENC removed — compression focus -->
                 <div class="metric"><span class="label">nvCOMP</span><span class="value" id="hw-nvcomp">-</span></div>
                 <div class="metric"><span class="label">VPI</span><span class="value" id="hw-vpi">-</span></div>
                 <div class="metric"><span class="label">CPU Cores</span><span class="value" id="hw-cpu">-</span></div>
