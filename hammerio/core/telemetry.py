@@ -135,7 +135,9 @@ class JtopMonitor:
 
     def __init__(self) -> None:
         self._jtop: Any = None
+        self._jtop_class: Any = None
         self._available = False
+        self._connected = False
         self._check_jtop()
 
     def _check_jtop(self) -> None:
@@ -146,6 +148,34 @@ class JtopMonitor:
             logger.info("jtop (jetson-stats) available")
         except ImportError:
             logger.info("jtop not available — using fallback telemetry")
+
+    def _ensure_connected(self) -> bool:
+        """Keep a persistent jtop connection open."""
+        if self._connected and self._jtop is not None:
+            return True
+        if not self._available:
+            return False
+        try:
+            self._jtop = self._jtop_class()
+            self._jtop.start()
+            self._connected = True
+            logger.info("jtop persistent connection opened")
+            return True
+        except Exception as e:
+            logger.warning("jtop connect failed: %s", e)
+            self._connected = False
+            self._jtop = None
+            return False
+
+    def close(self) -> None:
+        """Close the persistent jtop connection."""
+        if self._jtop is not None:
+            try:
+                self._jtop.close()
+            except Exception:
+                pass
+            self._jtop = None
+            self._connected = False
 
     @property
     def available(self) -> bool:
@@ -165,122 +195,128 @@ class JtopMonitor:
         if not self._available:
             return None
 
+        if not self._ensure_connected():
+            return None
+
         try:
-            with self._jtop_class() as jetson:
-                snap = SystemSnapshot(timestamp=time.time())
+            jetson = self._jtop
+            snap = SystemSnapshot(timestamp=time.time())
 
-                # CPU — dict with 'total' (overall) and 'cpu' (per-core list)
-                try:
-                    cpu_info = jetson.cpu
-                    if cpu_info and isinstance(cpu_info, dict):
-                        total = cpu_info.get("total", {})
-                        if isinstance(total, dict):
-                            snap.cpu.overall_pct = 100.0 - total.get("idle", 0)
-                        cores = cpu_info.get("cpu", [])
-                        if isinstance(cores, list):
-                            snap.cpu.per_core_pct = [
-                                100.0 - c.get("idle", 0)
-                                for c in cores if isinstance(c, dict)
-                            ]
-                except Exception:
-                    pass
+            # CPU — dict with 'total' (overall) and 'cpu' (per-core list)
+            try:
+                cpu_info = jetson.cpu
+                if cpu_info and isinstance(cpu_info, dict):
+                    total = cpu_info.get("total", {})
+                    if isinstance(total, dict):
+                        snap.cpu.overall_pct = 100.0 - total.get("idle", 0)
+                    cores = cpu_info.get("cpu", [])
+                    if isinstance(cores, list):
+                        snap.cpu.per_core_pct = [
+                            100.0 - c.get("idle", 0)
+                            for c in cores if isinstance(c, dict)
+                        ]
+            except Exception:
+                pass
 
-                # Memory — dict-like with "RAM", "SWAP", "EMC" keys
-                # Values are in KB
-                try:
-                    mem = jetson.memory
-                    if mem is not None:
-                        ram = mem.get("RAM", mem.get("ram", {}))
-                        if isinstance(ram, dict):
-                            snap.ram_used_mb = ram.get("used", 0) / 1024  # KB to MB
-                            snap.ram_total_mb = ram.get("tot", 0) / 1024
-                        swap = mem.get("SWAP", mem.get("swap", {}))
-                        if isinstance(swap, dict):
-                            snap.swap_used_mb = swap.get("used", 0) / 1024
-                            snap.swap_total_mb = swap.get("tot", 0) / 1024
-                        # EMC (external memory controller) utilization
-                        emc = mem.get("EMC", mem.get("emc", {}))
-                        if isinstance(emc, dict):
-                            snap.emc_utilization_pct = float(emc.get("val", 0))
-                            # cur is frequency in Hz or kHz depending on jtop version
-                            emc_freq = emc.get("cur", 0)
-                            if emc_freq > 1e6:
-                                snap.emc_frequency_mhz = emc_freq / 1e6
-                            else:
-                                snap.emc_frequency_mhz = float(emc_freq)
-                except Exception:
-                    pass
+            # Memory — dict-like with "RAM", "SWAP", "EMC" keys
+            # Values are in KB
+            try:
+                mem = jetson.memory
+                if mem is not None:
+                    ram = mem.get("RAM", mem.get("ram", {}))
+                    if isinstance(ram, dict):
+                        snap.ram_used_mb = ram.get("used", 0) / 1024  # KB to MB
+                        snap.ram_total_mb = ram.get("tot", 0) / 1024
+                    swap = mem.get("SWAP", mem.get("swap", {}))
+                    if isinstance(swap, dict):
+                        snap.swap_used_mb = swap.get("used", 0) / 1024
+                        snap.swap_total_mb = swap.get("tot", 0) / 1024
+                    # EMC (external memory controller) utilization
+                    emc = mem.get("EMC", mem.get("emc", {}))
+                    if isinstance(emc, dict):
+                        snap.emc_utilization_pct = float(emc.get("val", 0))
+                        # cur is frequency in Hz or kHz depending on jtop version
+                        emc_freq = emc.get("cur", 0)
+                        if emc_freq > 1e6:
+                            snap.emc_frequency_mhz = emc_freq / 1e6
+                        else:
+                            snap.emc_frequency_mhz = float(emc_freq)
+            except Exception:
+                pass
 
-                # Temperature — dict of {name: {temp, online}}
-                try:
-                    temp = jetson.temperature
-                    if temp and isinstance(temp, dict):
-                        for name, val in temp.items():
-                            temp_c = 0.0
-                            if isinstance(val, dict):
-                                if not val.get("online", True):
-                                    continue
-                                temp_c = val.get("temp", 0)
-                            elif isinstance(val, (int, float)):
-                                temp_c = float(val)
-                            if 0 < temp_c < 120:
-                                snap.thermal_zones.append(ThermalZone(
-                                    name=name, temperature_c=temp_c,
-                                ))
-                except Exception:
-                    pass
+            # Temperature — dict of {name: {temp, online}}
+            try:
+                temp = jetson.temperature
+                if temp and isinstance(temp, dict):
+                    for name, val in temp.items():
+                        temp_c = 0.0
+                        if isinstance(val, dict):
+                            if not val.get("online", True):
+                                continue
+                            temp_c = val.get("temp", 0)
+                        elif isinstance(val, (int, float)):
+                            temp_c = float(val)
+                        if 0 < temp_c < 120:
+                            snap.thermal_zones.append(ThermalZone(
+                                name=name, temperature_c=temp_c,
+                            ))
+            except Exception:
+                pass
 
-                # Power — dict with 'rail' (per-rail) and 'tot' (totals)
-                try:
-                    power = jetson.power
-                    if power and isinstance(power, dict):
-                        rails = power.get("rail", {})
-                        for name, data in rails.items():
-                            if isinstance(data, dict) and data.get("online", False):
-                                snap.power_readings.append(PowerReading(
-                                    rail_name=name,
-                                    current_mw=data.get("power", 0),
-                                    average_mw=data.get("avg", 0),
-                                ))
-                except Exception:
-                    pass
+            # Power — dict with 'rail' (per-rail) and 'tot' (totals)
+            try:
+                power = jetson.power
+                if power and isinstance(power, dict):
+                    rails = power.get("rail", {})
+                    for name, data in rails.items():
+                        if isinstance(data, dict) and data.get("online", False):
+                            snap.power_readings.append(PowerReading(
+                                rail_name=name,
+                                current_mw=data.get("power", 0),
+                                average_mw=data.get("avg", 0),
+                            ))
+            except Exception:
+                pass
 
-                # GPU — GPU object
-                try:
-                    gpu = jetson.gpu
-                    if gpu is not None:
-                        if hasattr(gpu, "val"):
-                            snap.gpu.utilization_pct = float(gpu.val)
-                        if hasattr(gpu, "frq"):
-                            f = gpu.frq
-                            snap.gpu.frequency_mhz = f / 1e6 if f > 1e6 else float(f)
-                except Exception:
-                    pass
+            # GPU — GPU object
+            try:
+                gpu = jetson.gpu
+                if gpu is not None:
+                    if hasattr(gpu, "val"):
+                        snap.gpu.utilization_pct = float(gpu.val)
+                    if hasattr(gpu, "frq"):
+                        f = gpu.frq
+                        snap.gpu.frequency_mhz = f / 1e6 if f > 1e6 else float(f)
+            except Exception:
+                pass
 
-                # Fan
-                try:
-                    fan = jetson.fan
-                    if fan is not None:
-                        if hasattr(fan, "speed"):
-                            snap.fan_speed_pct = float(fan.speed) if fan.speed else 0.0
-                except Exception:
-                    pass
+            # Fan
+            try:
+                fan = jetson.fan
+                if fan is not None:
+                    if hasattr(fan, "speed"):
+                        snap.fan_speed_pct = float(fan.speed) if fan.speed else 0.0
+            except Exception:
+                pass
 
-                # Power mode
-                try:
-                    if hasattr(jetson, "nvpmodel") and jetson.nvpmodel:
-                        snap.power_mode = str(jetson.nvpmodel)
-                except Exception:
-                    pass
+            # Power mode
+            try:
+                if hasattr(jetson, "nvpmodel") and jetson.nvpmodel:
+                    snap.power_mode = str(jetson.nvpmodel)
+            except Exception:
+                pass
 
-                # Throttling
-                snap.is_throttled = snap.max_temperature > 85.0
-                if snap.is_throttled:
-                    snap.throttle_reason = f"Thermal throttle: {snap.max_temperature:.1f}°C"
+            # Throttling
+            snap.is_throttled = snap.max_temperature > 85.0
+            if snap.is_throttled:
+                snap.throttle_reason = f"Thermal throttle: {snap.max_temperature:.1f}°C"
 
-                return snap
+            return snap
         except Exception as e:
-            logger.warning("jtop snapshot failed: %s", e)
+            # Broken pipe or connection lost — reconnect on next call
+            self._connected = False
+            self._jtop = None
+            logger.debug("jtop snapshot failed (will reconnect): %s", e)
             return None
 
 

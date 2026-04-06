@@ -198,6 +198,10 @@ def _register_routes(app: Flask) -> None:
     def console_page() -> str:
         return render_template_string(CONSOLE_HTML)
 
+    @app.route("/architecture")
+    def architecture_page() -> str:
+        return render_template_string(ARCHITECTURE_HTML)
+
     @app.route("/favicon.ico")
     def favicon() -> Any:
         """Return a minimal favicon to avoid 404 spam."""
@@ -1018,6 +1022,7 @@ DASHBOARD_HTML = """
         <div style="display:flex;align-items:center;gap:16px">
             <a href="/" style="color:var(--accent-cyan);text-decoration:none;font-weight:600;font-size:13px;padding:4px 12px;border:1px solid var(--accent-cyan);border-radius:6px">Dashboard</a>
             <a href="/console" style="color:var(--accent-green);text-decoration:none;font-weight:600;font-size:13px;padding:4px 12px;border:1px solid var(--accent-green);border-radius:6px">Console</a>
+            <a href="/architecture" style="color:var(--accent-orange);text-decoration:none;font-weight:600;font-size:13px;padding:4px 12px;border:1px solid var(--accent-orange);border-radius:6px">Architecture</a>
         </div>
         <div class="header-controls">
             <span class="live-label"><span class="live-dot" id="live-dot"></span> LIVE</span>
@@ -1030,6 +1035,14 @@ DASHBOARD_HTML = """
     </div>
 
     <div class="dashboard">
+        <!-- Performance History (top of dashboard) -->
+        <div class="card full-width">
+            <h2>Performance History <button class="export-btn" onclick="exportTelemetry()">Export JSON</button></h2>
+            <div class="chart-container">
+                <canvas id="history-chart"></canvas>
+            </div>
+        </div>
+
         <!-- Hardware Profile -->
         <div class="card">
             <h2><span class="indicator green" id="hw-indicator"></span> Hardware Profile</h2>
@@ -1103,21 +1116,7 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- Architecture -->
-        <div class="card full-width">
-            <h2>Architecture</h2>
-            <div style="text-align:center;overflow-x:auto">
-                <object data="/api/architecture.svg" type="image/svg+xml" style="max-width:100%;height:auto"></object>
-            </div>
-        </div>
-
-        <!-- History Chart -->
-        <div class="card full-width">
-            <h2>Performance History <button class="export-btn" onclick="exportTelemetry()">Export JSON</button></h2>
-            <div class="chart-container">
-                <canvas id="history-chart"></canvas>
-            </div>
-        </div>
+        <!-- Architecture moved to /architecture tab -->
 
         <!-- File Browser Modal -->
         <div id="browser-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:1000;justify-content:center;align-items:center">
@@ -2690,6 +2689,64 @@ Enter = Run | Shift+Enter = New line | Up/Down = History | Tab = Autocomplete
         insertCmd('hammer --help');
         runCmd();
     </script>
+</body>
+</html>
+"""
+
+# ─── Architecture Page HTML ────────────────────────────────────────────────────
+
+ARCHITECTURE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HammerIO Architecture</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, monospace; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+        .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 20px; background: linear-gradient(135deg, #39d2c0, #58a6ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .nav a { color: #8b949e; text-decoration: none; font-size: 13px; font-weight: 600; padding: 4px 12px; border: 1px solid #30363d; border-radius: 6px; margin-left: 8px; }
+        .nav a:hover, .nav a.active { color: #d29922; border-color: #d29922; }
+        .content { max-width: 900px; margin: 40px auto; padding: 0 20px; }
+        .svg-box { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px; text-align: center; }
+        .svg-box object { max-width: 100%; height: auto; }
+        .info { margin-top: 24px; color: #8b949e; font-size: 13px; line-height: 1.8; }
+        .info h2 { color: #e6edf3; font-size: 16px; margin-bottom: 8px; }
+        .footer { text-align: center; padding: 24px; color: #8b949e; font-size: 11px; }
+        .footer a { color: #58a6ff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>HammerIO Architecture</h1>
+        <div class="nav">
+            <a href="/">Dashboard</a>
+            <a href="/console">Console</a>
+            <a href="/architecture" class="active">Architecture</a>
+        </div>
+        <div style="color:#8b949e;font-size:11px;text-align:right">ResilientMind AI<br>Joseph C McGinty Jr</div>
+    </div>
+    <div class="content">
+        <div class="svg-box">
+            <object data="/api/architecture.svg" type="image/svg+xml" width="100%"></object>
+        </div>
+        <div class="info">
+            <h2>Compression Pipeline</h2>
+            <p>Every file is profiled (size, type, entropy) and routed to the optimal compressor:</p>
+            <ul style="margin:8px 0 0 20px">
+                <li><strong>Large files (Jetson/CUDA)</strong> - nvCOMP GPU LZ4 (10+ GB/s decompress)</li>
+                <li><strong>General files (macOS)</strong> - Apple LZFSE via Accelerate framework</li>
+                <li><strong>Default</strong> - CPU zstd with parallel threading</li>
+                <li><strong>Already compressed</strong> - Passthrough (no re-compression)</li>
+                <li><strong>GPU failure</strong> - Automatic CPU fallback with logged reason</li>
+            </ul>
+        </div>
+    </div>
+    <div class="footer">
+        Copyright 2026 <a href="https://resilientmindai.com">ResilientMind AI</a> | Joseph C McGinty Jr
+    </div>
 </body>
 </html>
 """

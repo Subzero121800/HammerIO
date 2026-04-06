@@ -1,7 +1,7 @@
 """Architecture SVG diagram generator for HammerIO.
 
-Generates a visual architecture diagram showing the processing pipeline,
-smart routing, and hardware integration.
+Generates a compression-focused architecture diagram.
+All text stays inside boxes, arrows don't overlap labels.
 
 Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
 """
@@ -14,175 +14,179 @@ from pathlib import Path
 def generate_architecture_svg(output_path: str | Path = "docs/architecture.svg") -> str:
     """Generate the HammerIO architecture SVG diagram."""
     svg = """<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 680" width="900" height="680">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 560" width="820" height="560">
   <defs>
-    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+    <linearGradient id="hg" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#1a1a2e"/>
       <stop offset="100%" style="stop-color:#16213e"/>
     </linearGradient>
-    <linearGradient id="gpuGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="gg" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#76b900"/>
       <stop offset="100%" style="stop-color:#4a7a00"/>
     </linearGradient>
-    <linearGradient id="cpuGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="cg" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#0071c5"/>
       <stop offset="100%" style="stop-color:#004a80"/>
     </linearGradient>
-    <linearGradient id="routerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="rg" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#e94560"/>
       <stop offset="100%" style="stop-color:#b33645"/>
     </linearGradient>
-    <linearGradient id="gstGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#e44d26"/>
-      <stop offset="100%" style="stop-color:#a83519"/>
+    <linearGradient id="ag" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#a855f7"/>
+      <stop offset="100%" style="stop-color:#7c3aed"/>
     </linearGradient>
-    <filter id="shadow">
-      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.3"/>
-    </filter>
+    <filter id="sh"><feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.25"/></filter>
     <style>
-      .title { font: bold 22px 'Segoe UI', sans-serif; fill: #e6edf3; }
-      .subtitle { font: 13px 'Segoe UI', sans-serif; fill: #8b949e; }
-      .box-label { font: bold 13px 'JetBrains Mono', monospace; fill: white; }
-      .box-detail { font: 11px 'JetBrains Mono', monospace; fill: rgba(255,255,255,0.8); }
-      .section-label { font: bold 12px 'Segoe UI', sans-serif; fill: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
-      .arrow { stroke: #58a6ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
-      .arrow-fallback { stroke: #d29922; stroke-width: 1.5; fill: none; stroke-dasharray: 6,4; marker-end: url(#arrowhead-warn); }
+      text { font-family: 'Segoe UI', system-ui, sans-serif; }
+      .t1 { font-size: 20px; font-weight: 700; fill: #e6edf3; }
+      .t2 { font-size: 11px; fill: #8b949e; }
+      .t3 { font-size: 12px; font-weight: 600; fill: white; }
+      .t4 { font-size: 10px; fill: rgba(255,255,255,0.8); }
+      .t5 { font-size: 10px; fill: #8b949e; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+      .ar { stroke: #58a6ff; stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+      .af { stroke: #d29922; stroke-width: 1.2; fill: none; stroke-dasharray: 5,3; marker-end: url(#wh); }
     </style>
-    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    <marker id="ah" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#58a6ff"/>
     </marker>
-    <marker id="arrowhead-warn" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    <marker id="wh" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#d29922"/>
     </marker>
   </defs>
 
   <!-- Background -->
-  <rect width="900" height="680" rx="12" fill="#0d1117"/>
+  <rect width="820" height="560" rx="10" fill="#0d1117"/>
 
   <!-- Header -->
-  <rect x="0" y="0" width="900" height="60" rx="12" fill="url(#headerGrad)"/>
-  <rect x="0" y="48" width="900" height="12" fill="url(#headerGrad)"/>
-  <text x="30" y="38" class="title">HammerIO Architecture</text>
-  <text x="350" y="38" class="subtitle">GPU where it matters. CPU where it doesn't.</text>
-  <text x="750" y="38" class="subtitle">v0.1.0</text>
+  <rect width="820" height="50" rx="10" fill="url(#hg)"/>
+  <rect y="40" width="820" height="10" fill="url(#hg)"/>
+  <text x="24" y="33" class="t1">HammerIO Architecture</text>
+  <text x="320" y="33" class="t2">Compression-focused. GPU where it matters.</text>
+  <text x="710" y="33" class="t2">v1.0.0</text>
 
-  <!-- Input Layer -->
-  <text x="30" y="90" class="section-label">Input</text>
-  <rect x="30" y="100" width="120" height="45" rx="8" fill="#1c2333" stroke="#30363d" filter="url(#shadow)"/>
-  <text x="90" y="120" class="box-label" text-anchor="middle">CLI</text>
-  <text x="90" y="135" class="box-detail" text-anchor="middle">hammer</text>
+  <!-- ═══ INPUT ROW ═══ -->
+  <text x="24" y="78" class="t5">Input</text>
 
-  <rect x="170" y="100" width="120" height="45" rx="8" fill="#1c2333" stroke="#30363d" filter="url(#shadow)"/>
-  <text x="230" y="120" class="box-label" text-anchor="middle">Python API</text>
-  <text x="230" y="135" class="box-detail" text-anchor="middle">import hammerio</text>
+  <rect x="24" y="86" width="115" height="40" rx="6" fill="#1c2333" stroke="#30363d" filter="url(#sh)"/>
+  <text x="82" y="103" class="t3" text-anchor="middle">CLI</text>
+  <text x="82" y="116" class="t4" text-anchor="middle">hammer</text>
 
-  <rect x="310" y="100" width="120" height="45" rx="8" fill="#1c2333" stroke="#30363d" filter="url(#shadow)"/>
-  <text x="370" y="120" class="box-label" text-anchor="middle">Web UI</text>
-  <text x="370" y="135" class="box-detail" text-anchor="middle">Dashboard</text>
+  <rect x="155" y="86" width="115" height="40" rx="6" fill="#1c2333" stroke="#30363d" filter="url(#sh)"/>
+  <text x="213" y="103" class="t3" text-anchor="middle">Python API</text>
+  <text x="213" y="116" class="t4" text-anchor="middle">import hammerio</text>
 
-  <!-- Arrows from inputs to router -->
-  <line x1="90" y1="145" x2="450" y2="200" class="arrow"/>
-  <line x1="230" y1="145" x2="450" y2="200" class="arrow"/>
-  <line x1="370" y1="145" x2="450" y2="200" class="arrow"/>
+  <rect x="286" y="86" width="115" height="40" rx="6" fill="#1c2333" stroke="#30363d" filter="url(#sh)"/>
+  <text x="344" y="103" class="t3" text-anchor="middle">Web UI</text>
+  <text x="344" y="116" class="t4" text-anchor="middle">Dashboard</text>
 
-  <!-- Smart Router -->
-  <text x="350" y="190" class="section-label">Smart Routing Engine</text>
-  <rect x="350" y="200" width="200" height="70" rx="10" fill="url(#routerGrad)" filter="url(#shadow)"/>
-  <text x="450" y="228" class="box-label" text-anchor="middle">JobRouter</text>
-  <text x="450" y="245" class="box-detail" text-anchor="middle">Profile → Route → Execute</text>
-  <text x="450" y="260" class="box-detail" text-anchor="middle">Auto fallback</text>
+  <rect x="417" y="86" width="115" height="40" rx="6" fill="#1c2333" stroke="#30363d" filter="url(#sh)"/>
+  <text x="475" y="103" class="t3" text-anchor="middle">Watch</text>
+  <text x="475" y="116" class="t4" text-anchor="middle">Drop folder</text>
 
-  <!-- Hardware Detection (sidebar) -->
-  <rect x="620" y="100" width="250" height="170" rx="10" fill="#1c2333" stroke="#30363d" filter="url(#shadow)"/>
-  <text x="745" y="125" class="box-label" text-anchor="middle">Hardware Detection</text>
-  <text x="640" y="148" class="box-detail">CUDA Device</text>
-  <text x="640" y="166" class="box-detail">NVENC / NVDEC</text>
-  <text x="640" y="184" class="box-detail">nvCOMP</text>
-  <text x="640" y="202" class="box-detail">VPI</text>
-  <text x="640" y="220" class="box-detail">GStreamer NVENC</text>
-  <text x="640" y="238" class="box-detail">CPU Cores</text>
-  <text x="640" y="256" class="box-detail">Thermal Sensors</text>
-  <line x1="550" y1="235" x2="620" y2="185" class="arrow"/>
+  <!-- Hardware sidebar -->
+  <rect x="580" y="72" width="220" height="138" rx="8" fill="#1c2333" stroke="#30363d" filter="url(#sh)"/>
+  <text x="690" y="95" class="t3" text-anchor="middle">Hardware Detection</text>
+  <text x="596" y="114" class="t4">CUDA / nvCOMP</text>
+  <text x="596" y="128" class="t4">Apple Accelerate / LZFSE</text>
+  <text x="596" y="142" class="t4">CPU cores / RAM</text>
+  <text x="596" y="156" class="t4">jtop / Thermal sensors</text>
+  <text x="596" y="170" class="t4">Jetson power mode</text>
+  <text x="596" y="184" class="t4">GStreamer NVENC</text>
 
-  <!-- GPU Encoders -->
-  <text x="30" y="310" class="section-label">GPU Accelerated</text>
+  <!-- Arrows: inputs → router -->
+  <line x1="82" y1="126" x2="270" y2="170" class="ar"/>
+  <line x1="213" y1="126" x2="270" y2="170" class="ar"/>
+  <line x1="344" y1="126" x2="310" y2="170" class="ar"/>
+  <line x1="475" y1="126" x2="350" y2="170" class="ar"/>
 
-  <rect x="30" y="320" width="150" height="55" rx="8" fill="url(#gpuGrad)" filter="url(#shadow)"/>
-  <text x="105" y="340" class="box-label" text-anchor="middle">Video (FFmpeg)</text>
-  <text x="105" y="357" class="box-detail" text-anchor="middle">NVENC / NVDEC</text>
+  <!-- ═══ ROUTER ═══ -->
+  <text x="24" y="162" class="t5">Smart Router</text>
+  <rect x="200" y="168" width="200" height="52" rx="8" fill="url(#rg)" filter="url(#sh)"/>
+  <text x="300" y="191" class="t3" text-anchor="middle">File Profiler + Router</text>
+  <text x="300" y="206" class="t4" text-anchor="middle">Size, type, entropy → route</text>
 
-  <!-- GStreamer NVENC path -->
-  <text x="30" y="395" class="section-label">GStreamer Path</text>
-  <rect x="30" y="405" width="150" height="45" rx="8" fill="url(#gstGrad)" filter="url(#shadow)"/>
-  <text x="105" y="425" class="box-label" text-anchor="middle">GStreamer</text>
-  <text x="105" y="440" class="box-detail" text-anchor="middle">nvv4l2h264/265enc</text>
-  <line x1="105" y1="375" x2="105" y2="405" class="arrow"/>
+  <!-- Arrow: hardware → router -->
+  <line x1="580" y1="160" x2="400" y2="190" class="ar"/>
 
-  <!-- Dashed line from GStreamer to CPU fallback -->
-  <line x1="105" y1="450" x2="105" y2="485" class="arrow-fallback"/>
+  <!-- ═══ GPU ROW ═══ -->
+  <text x="24" y="248" class="t5">GPU Accelerated</text>
 
-  <rect x="200" y="320" width="150" height="55" rx="8" fill="url(#gpuGrad)" filter="url(#shadow)"/>
-  <text x="275" y="343" class="box-label" text-anchor="middle">Bulk Data</text>
-  <text x="275" y="360" class="box-detail" text-anchor="middle">nvCOMP</text>
+  <rect x="24" y="258" width="180" height="50" rx="7" fill="url(#gg)" filter="url(#sh)"/>
+  <text x="114" y="279" class="t3" text-anchor="middle">nvCOMP LZ4</text>
+  <text x="114" y="294" class="t4" text-anchor="middle">Jetson / CUDA GPU</text>
 
-  <rect x="370" y="320" width="150" height="55" rx="8" fill="url(#gpuGrad)" filter="url(#shadow)"/>
-  <text x="445" y="343" class="box-label" text-anchor="middle">Images</text>
-  <text x="445" y="360" class="box-detail" text-anchor="middle">VPI / CUDA</text>
+  <!-- Apple Silicon -->
+  <rect x="220" y="258" width="180" height="50" rx="7" fill="url(#ag)" filter="url(#sh)"/>
+  <text x="310" y="279" class="t3" text-anchor="middle">Apple LZFSE</text>
+  <text x="310" y="294" class="t4" text-anchor="middle">Accelerate framework</text>
 
-  <rect x="540" y="320" width="150" height="55" rx="8" fill="url(#gpuGrad)" filter="url(#shadow)"/>
-  <text x="615" y="343" class="box-label" text-anchor="middle">Audio</text>
-  <text x="615" y="360" class="box-detail" text-anchor="middle">FFmpeg CUDA</text>
+  <!-- Router → GPU arrows -->
+  <line x1="260" y1="220" x2="114" y2="258" class="ar"/>
+  <line x1="300" y1="220" x2="310" y2="258" class="ar"/>
 
-  <rect x="710" y="320" width="150" height="55" rx="8" fill="url(#gpuGrad)" filter="url(#shadow)"/>
-  <text x="785" y="343" class="box-label" text-anchor="middle">ML Dataset</text>
-  <text x="785" y="360" class="box-detail" text-anchor="middle">Streaming</text>
+  <!-- ═══ CPU ROW ═══ -->
+  <text x="24" y="340" class="t5">CPU Compression</text>
 
-  <!-- Router to GPU arrows -->
-  <line x1="420" y1="270" x2="105" y2="320" class="arrow"/>
-  <line x1="430" y1="270" x2="275" y2="320" class="arrow"/>
-  <line x1="450" y1="270" x2="445" y2="320" class="arrow"/>
-  <line x1="470" y1="270" x2="615" y2="320" class="arrow"/>
-  <line x1="480" y1="270" x2="785" y2="320" class="arrow"/>
+  <rect x="24" y="350" width="140" height="50" rx="7" fill="url(#cg)" filter="url(#sh)"/>
+  <text x="94" y="371" class="t3" text-anchor="middle">zstd</text>
+  <text x="94" y="386" class="t4" text-anchor="middle">Default (parallel)</text>
 
-  <!-- CPU Fallbacks -->
-  <text x="200" y="475" class="section-label">CPU Fallback</text>
+  <rect x="180" y="350" width="120" height="50" rx="7" fill="url(#cg)" filter="url(#sh)"/>
+  <text x="240" y="371" class="t3" text-anchor="middle">gzip</text>
+  <text x="240" y="386" class="t4" text-anchor="middle">Compatibility</text>
 
-  <rect x="30" y="485" width="150" height="55" rx="8" fill="url(#cpuGrad)" filter="url(#shadow)"/>
-  <text x="105" y="508" class="box-label" text-anchor="middle">libx264/265</text>
-  <text x="105" y="525" class="box-detail" text-anchor="middle">CPU Video</text>
+  <rect x="316" y="350" width="120" height="50" rx="7" fill="url(#cg)" filter="url(#sh)"/>
+  <text x="376" y="371" class="t3" text-anchor="middle">lz4</text>
+  <text x="376" y="386" class="t4" text-anchor="middle">Speed priority</text>
 
-  <rect x="200" y="485" width="150" height="55" rx="8" fill="url(#cpuGrad)" filter="url(#shadow)"/>
-  <text x="275" y="508" class="box-label" text-anchor="middle">zstd / gzip</text>
-  <text x="275" y="525" class="box-detail" text-anchor="middle">CPU Compress</text>
+  <rect x="452" y="350" width="120" height="50" rx="7" fill="url(#cg)" filter="url(#sh)"/>
+  <text x="512" y="371" class="t3" text-anchor="middle">bzip2</text>
+  <text x="512" y="386" class="t4" text-anchor="middle">Max ratio</text>
 
-  <rect x="370" y="485" width="150" height="55" rx="8" fill="url(#cpuGrad)" filter="url(#shadow)"/>
-  <text x="445" y="508" class="box-label" text-anchor="middle">PIL / OpenCV</text>
-  <text x="445" y="525" class="box-detail" text-anchor="middle">CPU Images</text>
+  <!-- Router → CPU arrows -->
+  <line x1="300" y1="220" x2="94" y2="350" class="ar"/>
+  <line x1="320" y1="220" x2="240" y2="350" class="ar"/>
+  <line x1="340" y1="220" x2="376" y2="350" class="ar"/>
+  <line x1="360" y1="220" x2="512" y2="350" class="ar"/>
 
-  <rect x="540" y="485" width="150" height="55" rx="8" fill="url(#cpuGrad)" filter="url(#shadow)"/>
-  <text x="615" y="508" class="box-label" text-anchor="middle">FFmpeg CPU</text>
-  <text x="615" y="525" class="box-detail" text-anchor="middle">CPU Audio</text>
-
-  <!-- Fallback arrows (dashed) from GPU to CPU -->
-  <line x1="275" y1="375" x2="275" y2="485" class="arrow-fallback"/>
-  <line x1="445" y1="375" x2="445" y2="485" class="arrow-fallback"/>
-  <line x1="615" y1="375" x2="615" y2="485" class="arrow-fallback"/>
+  <!-- GPU → CPU fallback arrows -->
+  <line x1="114" y1="308" x2="94" y2="350" class="af"/>
+  <line x1="310" y1="308" x2="240" y2="350" class="af"/>
 
   <!-- Telemetry sidebar -->
-  <rect x="710" y="460" width="160" height="80" rx="10" fill="#1c2333" stroke="#d29922" filter="url(#shadow)"/>
-  <text x="790" y="488" class="box-label" text-anchor="middle">Telemetry</text>
-  <text x="730" y="508" class="box-detail">jtop / tegrastats</text>
-  <text x="730" y="523" class="box-detail">Thermal alerts</text>
-  <text x="730" y="538" class="box-detail">Power monitoring</text>
+  <rect x="610" y="258" width="190" height="80" rx="8" fill="#1c2333" stroke="#d29922" filter="url(#sh)"/>
+  <text x="705" y="281" class="t3" text-anchor="middle">Telemetry</text>
+  <text x="626" y="299" class="t4">jtop / tegrastats</text>
+  <text x="626" y="313" class="t4">Thermal + power alerts</text>
+  <text x="626" y="327" class="t4">GPU/CPU/RAM monitoring</text>
 
-  <!-- Output -->
-  <text x="30" y="580" class="section-label">Output</text>
-  <rect x="30" y="590" width="840" height="50" rx="8" fill="#1c2333" stroke="#3fb950" filter="url(#shadow)"/>
-  <text x="450" y="613" class="box-label" text-anchor="middle">Results: input size | output size | ratio | time | throughput | processor used | routing reason</text>
-  <text x="450" y="630" class="box-detail" text-anchor="middle">JSON / CSV / Rich Terminal / WebSocket</text>
+  <!-- Passthrough -->
+  <rect x="610" y="358" width="190" height="42" rx="7" fill="#1c2333" stroke="#30363d" filter="url(#sh)"/>
+  <text x="705" y="378" class="t3" text-anchor="middle">Passthrough</text>
+  <text x="705" y="392" class="t4" text-anchor="middle">Already compressed</text>
+
+  <!-- Router → passthrough -->
+  <line x1="380" y1="220" x2="705" y2="358" class="ar"/>
+
+  <!-- ═══ OUTPUT ═══ -->
+  <text x="24" y="432" class="t5">Output</text>
+  <rect x="24" y="440" width="776" height="46" rx="7" fill="#1c2333" stroke="#3fb950" filter="url(#sh)"/>
+  <text x="412" y="460" class="t3" text-anchor="middle">Results: input | output | ratio | time | throughput | processor | reason</text>
+  <text x="412" y="476" class="t4" text-anchor="middle">JSON / CSV / Rich terminal / WebSocket / Markdown export</text>
+
+  <!-- GPU/CPU → output arrows -->
+  <line x1="114" y1="308" x2="114" y2="440" class="ar" style="stroke-dasharray:none"/>
+  <line x1="310" y1="308" x2="310" y2="440" class="ar" style="stroke-dasharray:none"/>
+  <line x1="94" y1="400" x2="94" y2="440" class="ar"/>
+  <line x1="240" y1="400" x2="240" y2="440" class="ar"/>
+  <line x1="376" y1="400" x2="376" y2="440" class="ar"/>
+  <line x1="512" y1="400" x2="512" y2="440" class="ar"/>
+  <line x1="705" y1="400" x2="705" y2="440" class="ar"/>
 
   <!-- Footer -->
-  <text x="450" y="668" class="subtitle" text-anchor="middle">Copyright 2026 ResilientMind AI | Joseph C McGinty Jr | Apache 2.0</text>
+  <text x="412" y="520" class="t2" text-anchor="middle">Copyright 2026 ResilientMind AI | Joseph C McGinty Jr | Apache 2.0</text>
+  <text x="412" y="540" class="t2" text-anchor="middle">GPU where it matters. CPU where it doesn't. Zero configuration.</text>
 </svg>"""
 
     output = Path(output_path)
