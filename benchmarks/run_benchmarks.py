@@ -867,19 +867,56 @@ def benchmark_1gb(tmpdir: Path) -> list[BenchmarkResult]:
 
 
 def benchmark_10gb(tmpdir: Path) -> list[BenchmarkResult]:
-    """10GB stress test — generated locally, tests sustained throughput."""
+    """10GB stress test — uses a persistent cached file for repeatability."""
     console.print("\n[bold]10GB Stress Test Benchmark[/bold]")
 
+    # Persistent cache — generate once, reuse forever
+    cache_dir = Path.home() / ".cache" / "hammerio"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / "benchmark_10gb.bin"
+
+    if cached.exists() and cached.stat().st_size >= 9 * 1024 * 1024 * 1024:
+        console.print(f"  Using cached 10GB file: {cached}")
+        console.print(f"  Size: {cached.stat().st_size / (1024**3):.2f} GB")
+    else:
+        size_bytes = 10 * 1024 * 1024 * 1024
+        console.print("  Generating 10 GB test file (one-time, cached for future runs)...")
+
+        # Fast generation: 1MB seed block repeated with variation
+        # ~200 MB/s write speed on NVMe
+        seed = bytearray(1024 * 1024)  # 1MB
+        # Fill seed: 25% CSV text, 25% pattern, 25% semi-random, 25% zeros
+        quarter = len(seed) // 4
+        csv_line = b"2026-04-05T12:00:00,SNR0042,23.456,67.89,1013.25,active,OK\n"
+        for i in range(quarter):
+            seed[i] = csv_line[i % len(csv_line)]
+        for i in range(quarter, quarter * 2):
+            seed[i] = i & 0xFF
+        for i in range(quarter * 2, quarter * 3):
+            seed[i] = (i * 7 + 13) & 0xFF
+        # Last quarter stays zeros
+
+        written = 0
+        with open(cached, "wb") as f:
+            while written < size_bytes:
+                # Vary each block slightly so it's not perfectly repeating
+                block_num = written // len(seed)
+                seed[0] = block_num & 0xFF
+                seed[1] = (block_num >> 8) & 0xFF
+                seed[2] = (block_num >> 16) & 0xFF
+                f.write(seed)
+                written += len(seed)
+
+                # Progress every 512MB
+                if written % (512 * 1024 * 1024) == 0:
+                    console.print(f"    {written / (1024**3):.1f} / 10.0 GB...")
+
+        console.print(f"  Generated: {cached.stat().st_size / (1024**3):.2f} GB")
+        console.print(f"  Cached at: {cached}")
+
+    # Copy to tmpdir (symlink to avoid double disk usage)
     src = tmpdir / "stress_test_10gb.bin"
-    size_gb = 10
-    size_mb = size_gb * 1024
-
-    console.print(f"  Generating {size_gb} GB test data (mixed content)...")
-    console.print("  This will take a minute...")
-
-    _generate_test_data(src, size_mb, data_type="compressible")
-    actual_gb = src.stat().st_size / (1024 ** 3)
-    console.print(f"  Generated: {actual_gb:.2f} GB")
+    os.symlink(str(cached), str(src))
 
     return benchmark_roundtrip(tmpdir, source_file=src)
 
