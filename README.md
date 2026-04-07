@@ -46,6 +46,21 @@ cd HammerIO && pip install -e .
 
 Requires Python 3.10+. GPU features require CUDA 12.x and NVIDIA nvCOMP.
 
+## Post-Install Setup
+
+After installing with pip, run these optional setup commands:
+
+```bash
+# Accept the license agreement (shown automatically on first run)
+hammer --accept-license
+
+# Install right-click compress/decompress in your file manager
+hammer install-desktop
+
+# Launch the web dashboard (GPU monitoring, file browser, compression UI)
+hammer webui
+```
+
 ## Quick Start
 
 ```bash
@@ -66,6 +81,9 @@ hammer info --routes ./my_file.csv
 
 # Hardware profile
 hammer info --hardware
+
+# Install right-click context menu (Nautilus, Nemo, Thunar)
+hammer install-desktop
 ```
 
 **Python API:**
@@ -195,6 +213,7 @@ Real-time monitoring: GPU/CPU utilization, thermal zones, power rails, per-core 
 | `hammer batch` | Batch compress a directory with parallel workers |
 | `hammer watch` | Watch folders and auto-process dropped files |
 | `hammer benchmark` | Run GPU vs CPU benchmark suite |
+| `hammer install-desktop` | Install right-click compress/decompress in file manager |
 | `hammer info` | Hardware profile, routing decisions, telemetry |
 | `hammer config` | Show, save, or generate configuration |
 | `hammer monitor` | Live terminal telemetry (jtop-style) |
