@@ -587,8 +587,25 @@ def main_callback(
     ctx: typer.Context,
     one_gb: bool = typer.Option(False, "--1gb", help="Shortcut for 'benchmark --1gb'"),
     ten_gb: bool = typer.Option(False, "--10gb", help="Shortcut for 'benchmark --10gb'"),
+    accept_license: bool = typer.Option(False, "--accept-license",
+        help="Accept the license agreement non-interactively", hidden=True),
 ) -> None:
     """HammerIO — GPU where it matters. CPU where it doesn't."""
+    from hammerio.core.license import (
+        is_license_accepted, record_acceptance, require_license_acceptance,
+    )
+
+    # --accept-license flag for CI/scripted environments
+    if accept_license:
+        record_acceptance()
+        console.print("[green]License accepted.[/green]")
+        if ctx.invoked_subcommand is None and not one_gb and not ten_gb:
+            raise typer.Exit()
+
+    # First-run license check — every command requires acceptance
+    if not is_license_accepted():
+        require_license_acceptance()
+
     if one_gb or ten_gb:
         from hammerio.cli.main import _run_benchmark_sized
         _run_benchmark_sized(large=one_gb, huge=ten_gb)
