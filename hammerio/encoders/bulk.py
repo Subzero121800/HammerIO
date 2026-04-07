@@ -22,11 +22,14 @@ logger = logging.getLogger("hammerio.encoders.bulk")
 # Container format constants
 # ---------------------------------------------------------------------------
 MAGIC = b"HMIO"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 ALGO_FIELD_LEN = 32  # algorithm name, null-padded
 # Header: magic(4) + version(4) + algo(32) + original_size(8) = 48 bytes
 HEADER_STRUCT = struct.Struct(f"<4sI{ALGO_FIELD_LEN}sQ")
-CHUNK_SIZE_STRUCT = struct.Struct("<I")
+# v2: 64-bit chunk lengths to support chunks > 4GB
+CHUNK_SIZE_STRUCT_V2 = struct.Struct("<Q")
+# v1 compat: 32-bit chunk lengths (read-only, for old files)
+CHUNK_SIZE_STRUCT_V1 = struct.Struct("<I")
 
 SUPPORTED_ALGORITHMS = ("lz4", "snappy", "zstd", "deflate")
 DEFAULT_CHUNK_SIZE = 64 * 1024 * 1024  # 64 MiB
@@ -206,7 +209,11 @@ def _cpu_decompress(data: bytes, algorithm: str) -> bytes:
     if algorithm == "zstd":
         import zstandard
         decompressor = zstandard.ZstdDecompressor()
-        return decompressor.decompress(data, max_output_size=DEFAULT_CHUNK_SIZE * 2)
+        # max_output_size must accommodate the largest possible uncompressed
+        # chunk.  With dynamic GPU chunk sizing this can be up to 2GB+.
+        # Use len(data) * 20 as a safe upper bound (20x expansion ratio).
+        max_out = max(len(data) * 20, 2 * 1024 * 1024 * 1024)
+        return decompressor.decompress(data, max_output_size=max_out)
 
     if algorithm == "snappy":
         import snappy
@@ -316,6 +323,7 @@ class BulkEncoder:
 
         # Dynamic chunk sizing for GPU: pick chunk size based on file size
         use_gpu = self._use_gpu
+        active_chunk_size = self.chunk_size  # local copy — don't mutate self
         if use_gpu:
             gpu_mem = self.hardware.gpu_memory_mb
             gpu_chunk = _compute_gpu_chunk_size(original_size, gpu_mem)
@@ -328,7 +336,7 @@ class BulkEncoder:
                 )
                 use_gpu = False
             else:
-                self.chunk_size = gpu_chunk
+                active_chunk_size = gpu_chunk
                 logger.info(
                     "GPU chunk size: %d MB (%d chunks for %d MB file)",
                     gpu_chunk // (1024 * 1024), est_chunks,
@@ -339,7 +347,7 @@ class BulkEncoder:
         algo_bytes = algorithm.encode("ascii").ljust(ALGO_FIELD_LEN, b"\x00")
 
         with open(input_path, "rb") as fin, open(output_path, "wb") as fout:
-            # Write header
+            # Write header (v2 format with 64-bit chunk lengths)
             header = HEADER_STRUCT.pack(MAGIC, FORMAT_VERSION, algo_bytes, original_size)
             fout.write(header)
 
@@ -347,15 +355,16 @@ class BulkEncoder:
                 bytes_read = self._gpu_process_chunks(
                     fin, fout, algorithm, original_size,
                     progress_callback, job_id,
+                    chunk_size=active_chunk_size,
                 )
             else:
                 while True:
-                    chunk = fin.read(self.chunk_size)
+                    chunk = fin.read(active_chunk_size)
                     if not chunk:
                         break
 
                     compressed = _cpu_compress(chunk, algorithm, quality)
-                    fout.write(CHUNK_SIZE_STRUCT.pack(len(compressed)))
+                    fout.write(CHUNK_SIZE_STRUCT_V2.pack(len(compressed)))
                     fout.write(compressed)
 
                     bytes_read += len(chunk)
@@ -417,18 +426,21 @@ class BulkEncoder:
                 raise ValueError(
                     f"Invalid magic bytes: expected {MAGIC!r}, got {magic!r}"
                 )
-            if version != FORMAT_VERSION:
+            if version not in (1, 2):
                 raise ValueError(
-                    f"Unsupported format version: {version} (expected {FORMAT_VERSION})"
+                    f"Unsupported format version: {version} (expected 1 or 2)"
                 )
+
+            # Select chunk size struct based on container version
+            chunk_struct = CHUNK_SIZE_STRUCT_V2 if version >= 2 else CHUNK_SIZE_STRUCT_V1
 
             algorithm = algo_bytes.rstrip(b"\x00").decode("ascii")
             if algorithm not in SUPPORTED_ALGORITHMS:
                 raise ValueError(f"Unknown algorithm in container: '{algorithm}'")
 
             logger.info(
-                "%sDecompressing %s (algorithm=%s, original_size=%d)",
-                prefix, input_path.name, algorithm, original_size,
+                "%sDecompressing %s (v%d, algorithm=%s, original_size=%d)",
+                prefix, input_path.name, version, algorithm, original_size,
             )
 
             bytes_written = 0
@@ -437,16 +449,17 @@ class BulkEncoder:
                 bytes_written = self._gpu_decompress_chunks(
                     fin, fout, algorithm, original_size,
                     progress_callback, job_id,
+                    format_version=version,
                 )
             else:
                 while True:
-                    size_data = fin.read(CHUNK_SIZE_STRUCT.size)
+                    size_data = fin.read(chunk_struct.size)
                     if not size_data:
                         break
-                    if len(size_data) < CHUNK_SIZE_STRUCT.size:
+                    if len(size_data) < chunk_struct.size:
                         raise ValueError("Truncated chunk size field.")
 
-                    (chunk_len,) = CHUNK_SIZE_STRUCT.unpack(size_data)
+                    (chunk_len,) = chunk_struct.unpack(size_data)
                     compressed_chunk = fin.read(chunk_len)
                     if len(compressed_chunk) < chunk_len:
                         raise ValueError("Truncated compressed chunk data.")
@@ -476,6 +489,7 @@ class BulkEncoder:
         original_size: int,
         progress_callback: Optional[Callable] = None,
         job_id: Optional[str] = None,
+        chunk_size: int = 0,
     ) -> int:
         """Compress chunks with double-buffered CUDA streams and pinned memory.
 
@@ -489,7 +503,7 @@ class BulkEncoder:
         from nvidia.nvcomp import Codec, Array
 
         codec = Codec(algorithm=algorithm)
-        chunk_sz = self.chunk_size
+        chunk_sz = chunk_size or self.chunk_size
 
         # Two CUDA streams for double-buffering
         streams = [cp.cuda.Stream(non_blocking=True),
@@ -523,7 +537,7 @@ class BulkEncoder:
                 p_stream, p_comp = pending
                 p_stream.synchronize()
                 comp_bytes = cp.asnumpy(cp.asarray(p_comp)).tobytes()
-                fout.write(CHUNK_SIZE_STRUCT.pack(len(comp_bytes)))
+                fout.write(CHUNK_SIZE_STRUCT_V2.pack(len(comp_bytes)))
                 fout.write(comp_bytes)
 
             pending = (stream, compressed)
@@ -539,7 +553,7 @@ class BulkEncoder:
             p_stream, p_comp = pending
             p_stream.synchronize()
             comp_bytes = cp.asnumpy(cp.asarray(p_comp)).tobytes()
-            fout.write(CHUNK_SIZE_STRUCT.pack(len(comp_bytes)))
+            fout.write(CHUNK_SIZE_STRUCT_V2.pack(len(comp_bytes)))
             fout.write(comp_bytes)
 
         return bytes_read
@@ -552,6 +566,7 @@ class BulkEncoder:
         original_size: int,
         progress_callback: Optional[Callable] = None,
         job_id: Optional[str] = None,
+        format_version: int = FORMAT_VERSION,
     ) -> int:
         """Decompress chunks with double-buffered CUDA streams and pinned memory."""
         import cupy as cp
@@ -559,6 +574,7 @@ class BulkEncoder:
         from nvidia.nvcomp import Codec, Array
 
         codec = Codec(algorithm=algorithm)
+        chunk_struct = CHUNK_SIZE_STRUCT_V2 if format_version >= 2 else CHUNK_SIZE_STRUCT_V1
 
         streams = [cp.cuda.Stream(non_blocking=True),
                    cp.cuda.Stream(non_blocking=True)]
@@ -568,13 +584,13 @@ class BulkEncoder:
         pending = None  # (stream, decompressed_array)
 
         while True:
-            size_data = fin.read(CHUNK_SIZE_STRUCT.size)
+            size_data = fin.read(chunk_struct.size)
             if not size_data:
                 break
-            if len(size_data) < CHUNK_SIZE_STRUCT.size:
+            if len(size_data) < chunk_struct.size:
                 raise ValueError("Truncated chunk size field.")
 
-            (chunk_len,) = CHUNK_SIZE_STRUCT.unpack(size_data)
+            (chunk_len,) = chunk_struct.unpack(size_data)
             compressed_chunk = fin.read(chunk_len)
             if len(compressed_chunk) < chunk_len:
                 raise ValueError("Truncated compressed chunk data.")
