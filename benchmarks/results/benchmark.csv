@@ -1,5 +1,7 @@
-test_name,workload,method,processor,input_size_bytes,output_size_bytes,elapsed_seconds,compression_ratio,throughput_mbps,notes
-roundtrip,10240MB_mixed,cpu,zstd_level1,10737418240,6737929,5.888907712011132,1593.5784185318664,1738.862366464717,"decomp: 835 MB/s, match: True"
-roundtrip,10240MB_mixed,cpu,zstd_level3,10737418240,1561609,2.9712995320005575,6875.868568892725,3446.3035078477837,"decomp: 807 MB/s, match: True"
-roundtrip,10240MB_mixed,cpu,zstd_level9,10737418240,821106,5.035245728009613,13076.774789125886,2033.6644035141815,"decomp: 831 MB/s, match: True"
-roundtrip,10240MB_mixed,cpu,gzip_level6,10737418240,41841876,83.31604670399975,256.6189489209327,122.90549546091712,"decomp: 293 MB/s, match: True"
+test_name,workload,method,processor,input_size_bytes,output_size_bytes,elapsed_seconds,compression_ratio,throughput_mbps,notes,chunk_count,chunk_size_mb,gpu_sync_overhead_ms,latency_p50_ms,latency_p95_ms,latency_p99_ms,peak_memory_host_mb,peak_memory_gpu_mb,iops
+in_memory,64MB_inmem,cpu,zstd_level1,67108864,33558595,0.07589707066654228,1.9997518966452559,843.247301087381,"comp: 1618 MB/s, decomp: 1761 MB/s, iters: 3",,,,36.75,45.7,45.7,136.7,,
+in_memory,64MB_inmem,cpu,zstd_level3,67108864,33558601,0.08226391533389688,1.9997515391061742,777.9838795689898,"comp: 1340 MB/s, decomp: 1855 MB/s, iters: 3",,,,42.87,64.74,64.74,91.5,,
+in_memory,64MB_inmem,cpu,zstd_level9,67108864,33558602,0.1291697376582306,1.9997514795163398,495.47209091139604,"comp: 676 MB/s, decomp: 1855 MB/s, iters: 3",,,,85.03,118.63,118.63,130.5,,
+in_memory,64MB_inmem,gpu,nvcomp_lz4,67108864,33925178,0.10325450498688345,1.9781433129105468,619.8276773311732,"comp: 672 MB/s, decomp: 7986 MB/s, iters: 3",,,,91.91,105.6,105.6,,,
+in_memory,64MB_inmem,gpu,nvcomp_zstd,67108864,33671233,0.14841704199595068,1.9930622677227174,431.2173261190998,"comp: 481 MB/s, decomp: 4163 MB/s, iters: 3",,,,129.69,139.99,139.99,,17.6,
+in_memory,64MB_inmem,gpu,nvcomp_snappy,67108864,39936067,0.04548793132804955,1.68040743721709,1406.9665982048127,"comp: 1856 MB/s, decomp: 5820 MB/s, iters: 3",,,,33.31,36.91,36.91,,,

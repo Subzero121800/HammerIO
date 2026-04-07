@@ -254,6 +254,8 @@ def benchmark(
     quick: bool = typer.Option(False, "--quick", help="Quick benchmark (100MB test data)"),
     large: bool = typer.Option(False, "--1gb", help="Large file benchmark (1GB download)"),
     huge: bool = typer.Option(False, "--10gb", help="Huge file benchmark (10GB generated)"),
+    bench_type: str = typer.Option("all", "--type", "-t",
+        help="Benchmark type: all, roundtrip, memory, random-io, scale"),
 ) -> None:
     """Run the HammerIO compression benchmark suite.
 
@@ -262,6 +264,13 @@ def benchmark(
       --1gb    1GB data from download (thorough, ~5 minutes)
       --10gb   10GB generated data (stress test, ~20 minutes)
       default  500MB mixed data (~2 minutes)
+
+    Benchmark types (--type):
+      all        Run all benchmark types (default)
+      roundtrip  Sequential compress/decompress round-trip
+      memory     In-memory only — pure algorithm speed, no disk I/O
+      random-io  Random read/write/mixed patterns with IOPS & latency
+      scale      Scalability sweep from 1MB to 1GB
     """
     console.print(Panel(
         "[bold]HammerIO Benchmark Suite[/bold]\n"
@@ -279,7 +288,10 @@ def benchmark(
         if not Path(output).is_absolute():
             output = str(Path(_project_root) / output)
         from benchmarks.run_benchmarks import run_all_benchmarks
-        results = run_all_benchmarks(quick=quick, large=large, huge=huge, output_path=output)
+        results = run_all_benchmarks(
+            quick=quick, large=large, huge=huge,
+            bench_type=bench_type, output_path=output,
+        )
         console.print(f"\n[green]Results saved to:[/green] {output}")
     except ImportError as ie:
         console.print(f"[red]Benchmark module not found:[/red] {ie}")

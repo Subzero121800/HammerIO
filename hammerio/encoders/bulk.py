@@ -32,6 +32,46 @@ SUPPORTED_ALGORITHMS = ("lz4", "snappy", "zstd", "deflate")
 DEFAULT_CHUNK_SIZE = 64 * 1024 * 1024  # 64 MiB
 
 # ---------------------------------------------------------------------------
+# Dynamic GPU chunk sizing
+# ---------------------------------------------------------------------------
+# On Jetson (unified memory) the GPU can address most of system RAM.
+# Larger chunks reduce synchronization overhead at the cost of memory.
+# nvCOMP needs ~2x chunk_size of GPU memory (input + output buffers).
+
+_1GB = 1024 * 1024 * 1024
+
+
+def _compute_gpu_chunk_size(file_size: int, gpu_memory_mb: int = 0) -> int:
+    """Choose an optimal GPU chunk size based on file size and GPU memory.
+
+    Returns chunk size in bytes.  The goal is to keep the total number of
+    chunks low (ideally ≤10) to minimise CPU-GPU sync overhead, while
+    staying within GPU memory limits.
+    """
+    if gpu_memory_mb > 0:
+        # nvCOMP needs ~3x chunk_size at peak (input + output + internal scratch).
+        # On Jetson unified memory, pinned host buffers also consume from the
+        # same pool.  Use at most 15% of total GPU memory per chunk to leave
+        # headroom for double-buffered pinned allocations and system use.
+        mem_limit = int(gpu_memory_mb * 0.15) * 1024 * 1024
+    else:
+        # Conservative default: 1 GB per chunk
+        mem_limit = _1GB
+
+    # Target ≤10 chunks for the file
+    target_chunks = 10
+    ideal_chunk = file_size // target_chunks if file_size > 0 else 256 * 1024 * 1024
+
+    # Clamp: at least 256MB, at most mem_limit
+    chunk = max(256 * 1024 * 1024, min(ideal_chunk, mem_limit))
+
+    # Round to nearest 256MB boundary for alignment
+    alignment = 256 * 1024 * 1024
+    chunk = ((chunk + alignment - 1) // alignment) * alignment
+
+    return chunk
+
+# ---------------------------------------------------------------------------
 # GPU compression helpers (nvCOMP)
 # ---------------------------------------------------------------------------
 
@@ -57,10 +97,21 @@ def _check_nvcomp() -> bool:
     return _nvcomp_available
 
 
+def _to_pinned_array(data: bytes):
+    """Copy *data* into a pinned (page-locked) host buffer and return as numpy array."""
+    import cupy as cp
+    import numpy as np
+
+    pinned_mem = cp.cuda.alloc_pinned_memory(len(data))
+    np_arr = np.frombuffer(pinned_mem, dtype=np.uint8, count=len(data))
+    np_arr[:] = np.frombuffer(data, dtype=np.uint8)
+    return np_arr
+
+
 def _gpu_compress(data: bytes, algorithm: str) -> bytes:
     """Compress *data* on the GPU using nvCOMP (nvidia-nvcomp).
 
-    Uses the nvidia.nvcomp.Codec API (v4.x+) for GPU-accelerated compression.
+    Uses pinned memory for faster host-to-device transfers.
 
     Args:
         data: Raw bytes to compress.
@@ -73,15 +124,17 @@ def _gpu_compress(data: bytes, algorithm: str) -> bytes:
     from nvidia.nvcomp import Codec, Array
 
     codec = Codec(algorithm=algorithm)
-    d_input = cp.frombuffer(bytearray(data), dtype=cp.uint8)
-    arr = Array(d_input)
-    compressed = codec.encode(arr)
+    np_pinned = _to_pinned_array(data)
+    d_input = cp.asarray(np_pinned)
+    compressed = codec.encode(Array(d_input))
     cp.cuda.Stream.null.synchronize()
     return cp.asnumpy(cp.asarray(compressed)).tobytes()
 
 
 def _gpu_decompress(data: bytes, algorithm: str) -> bytes:
     """Decompress *data* on the GPU using nvCOMP.
+
+    Uses pinned memory for faster host-to-device transfers.
 
     Args:
         data: Compressed bytes (must have been compressed by nvCOMP).
@@ -94,16 +147,11 @@ def _gpu_decompress(data: bytes, algorithm: str) -> bytes:
     from nvidia.nvcomp import Codec, Array
 
     codec = Codec(algorithm=algorithm)
-    d_input = cp.frombuffer(bytearray(data), dtype=cp.uint8)
-    arr = Array(d_input)
-    decompressed = codec.decode(arr)
+    np_pinned = _to_pinned_array(data)
+    d_input = cp.asarray(np_pinned)
+    decompressed = codec.decode(Array(d_input))
     cp.cuda.Stream.null.synchronize()
     return cp.asnumpy(cp.asarray(decompressed)).tobytes()
-
-    d_input = cp.frombuffer(data, dtype=cp.uint8)
-    manager = manager_cls()
-    d_decompressed = manager.decompress(d_input)
-    return cp.asnumpy(d_decompressed).tobytes()
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +236,9 @@ class BulkEncoder:
             compression through nvCOMP or fall back to CPU.
     """
 
+    # Maximum chunks before GPU overhead exceeds benefit — route to CPU
+    GPU_MAX_CHUNKS = 20
+
     def __init__(self, hardware: HardwareProfile) -> None:
         self.hardware = hardware
         self.chunk_size: int = DEFAULT_CHUNK_SIZE
@@ -263,6 +314,27 @@ class BulkEncoder:
                 f"Output directory is not writable: {output_path.parent}"
             )
 
+        # Dynamic chunk sizing for GPU: pick chunk size based on file size
+        use_gpu = self._use_gpu
+        if use_gpu:
+            gpu_mem = self.hardware.gpu_memory_mb
+            gpu_chunk = _compute_gpu_chunk_size(original_size, gpu_mem)
+            est_chunks = (original_size + gpu_chunk - 1) // gpu_chunk
+            if est_chunks > self.GPU_MAX_CHUNKS:
+                logger.warning(
+                    "Large file chunking overhead (%d chunks) may exceed GPU "
+                    "benefit — routing to CPU zstd for %s",
+                    est_chunks, input_path.name,
+                )
+                use_gpu = False
+            else:
+                self.chunk_size = gpu_chunk
+                logger.info(
+                    "GPU chunk size: %d MB (%d chunks for %d MB file)",
+                    gpu_chunk // (1024 * 1024), est_chunks,
+                    original_size // (1024 * 1024),
+                )
+
         bytes_read = 0
         algo_bytes = algorithm.encode("ascii").ljust(ALGO_FIELD_LEN, b"\x00")
 
@@ -271,19 +343,25 @@ class BulkEncoder:
             header = HEADER_STRUCT.pack(MAGIC, FORMAT_VERSION, algo_bytes, original_size)
             fout.write(header)
 
-            while True:
-                chunk = fin.read(self.chunk_size)
-                if not chunk:
-                    break
+            if use_gpu:
+                bytes_read = self._gpu_process_chunks(
+                    fin, fout, algorithm, original_size,
+                    progress_callback, job_id,
+                )
+            else:
+                while True:
+                    chunk = fin.read(self.chunk_size)
+                    if not chunk:
+                        break
 
-                compressed = self._compress_chunk(chunk, algorithm, quality)
-                fout.write(CHUNK_SIZE_STRUCT.pack(len(compressed)))
-                fout.write(compressed)
+                    compressed = _cpu_compress(chunk, algorithm, quality)
+                    fout.write(CHUNK_SIZE_STRUCT.pack(len(compressed)))
+                    fout.write(compressed)
 
-                bytes_read += len(chunk)
-                if progress_callback is not None:
-                    progress = min(bytes_read / original_size * 100, 100.0) if original_size else 100.0
-                    progress_callback(job_id or "", round(progress, 1))
+                    bytes_read += len(chunk)
+                    if progress_callback is not None:
+                        progress = min(bytes_read / original_size * 100, 100.0) if original_size else 100.0
+                        progress_callback(job_id or "", round(progress, 1))
 
         compressed_size = output_path.stat().st_size
         ratio = compressed_size / original_size if original_size else 0.0
@@ -355,30 +433,183 @@ class BulkEncoder:
 
             bytes_written = 0
 
-            while True:
-                size_data = fin.read(CHUNK_SIZE_STRUCT.size)
-                if not size_data:
-                    break
-                if len(size_data) < CHUNK_SIZE_STRUCT.size:
-                    raise ValueError("Truncated chunk size field.")
+            if self._use_gpu:
+                bytes_written = self._gpu_decompress_chunks(
+                    fin, fout, algorithm, original_size,
+                    progress_callback, job_id,
+                )
+            else:
+                while True:
+                    size_data = fin.read(CHUNK_SIZE_STRUCT.size)
+                    if not size_data:
+                        break
+                    if len(size_data) < CHUNK_SIZE_STRUCT.size:
+                        raise ValueError("Truncated chunk size field.")
 
-                (chunk_len,) = CHUNK_SIZE_STRUCT.unpack(size_data)
-                compressed_chunk = fin.read(chunk_len)
-                if len(compressed_chunk) < chunk_len:
-                    raise ValueError("Truncated compressed chunk data.")
+                    (chunk_len,) = CHUNK_SIZE_STRUCT.unpack(size_data)
+                    compressed_chunk = fin.read(chunk_len)
+                    if len(compressed_chunk) < chunk_len:
+                        raise ValueError("Truncated compressed chunk data.")
 
-                decompressed = self._decompress_chunk(compressed_chunk, algorithm)
-                fout.write(decompressed)
+                    decompressed = _cpu_decompress(compressed_chunk, algorithm)
+                    fout.write(decompressed)
 
-                bytes_written += len(decompressed)
-                if progress_callback is not None:
-                    progress = min(bytes_written / original_size * 100, 100.0) if original_size else 100.0
-                    progress_callback(job_id or "", round(progress, 1))
+                    bytes_written += len(decompressed)
+                    if progress_callback is not None:
+                        progress = min(bytes_written / original_size * 100, 100.0) if original_size else 100.0
+                        progress_callback(job_id or "", round(progress, 1))
 
         logger.info(
             "%sDecompression complete: %d bytes restored.", prefix, bytes_written,
         )
         return str(output_path)
+
+    # ------------------------------------------------------------------
+    # Pipelined GPU helpers
+    # ------------------------------------------------------------------
+
+    def _gpu_process_chunks(
+        self,
+        fin,
+        fout,
+        algorithm: str,
+        original_size: int,
+        progress_callback: Optional[Callable] = None,
+        job_id: Optional[str] = None,
+    ) -> int:
+        """Compress chunks with double-buffered CUDA streams and pinned memory.
+
+        Overlaps host-to-device transfer of chunk N+1 with GPU encoding of
+        chunk N, roughly halving the wall-clock time spent on transfers.
+
+        Returns total bytes read.
+        """
+        import cupy as cp
+        import numpy as np
+        from nvidia.nvcomp import Codec, Array
+
+        codec = Codec(algorithm=algorithm)
+        chunk_sz = self.chunk_size
+
+        # Two CUDA streams for double-buffering
+        streams = [cp.cuda.Stream(non_blocking=True),
+                   cp.cuda.Stream(non_blocking=True)]
+
+        # Two pinned host buffers
+        pinned = [cp.cuda.alloc_pinned_memory(chunk_sz),
+                  cp.cuda.alloc_pinned_memory(chunk_sz)]
+
+        bytes_read = 0
+        buf_idx = 0
+        pending = None  # (stream, compressed_nvcomp_array)
+
+        while True:
+            chunk = fin.read(chunk_sz)
+            if not chunk:
+                break
+
+            chunk_len = len(chunk)
+            stream = streams[buf_idx]
+            np_pinned = np.frombuffer(pinned[buf_idx], dtype=np.uint8, count=chunk_len)
+            np_pinned[:] = np.frombuffer(chunk, dtype=np.uint8)
+
+            # Launch async H2D + encode on this stream
+            with stream:
+                d_input = cp.asarray(np_pinned)
+                compressed = codec.encode(Array(d_input))
+
+            # While GPU works on current chunk, flush previous result
+            if pending is not None:
+                p_stream, p_comp = pending
+                p_stream.synchronize()
+                comp_bytes = cp.asnumpy(cp.asarray(p_comp)).tobytes()
+                fout.write(CHUNK_SIZE_STRUCT.pack(len(comp_bytes)))
+                fout.write(comp_bytes)
+
+            pending = (stream, compressed)
+            buf_idx = 1 - buf_idx
+
+            bytes_read += chunk_len
+            if progress_callback is not None:
+                progress = min(bytes_read / original_size * 100, 100.0) if original_size else 100.0
+                progress_callback(job_id or "", round(progress, 1))
+
+        # Flush last pending chunk
+        if pending is not None:
+            p_stream, p_comp = pending
+            p_stream.synchronize()
+            comp_bytes = cp.asnumpy(cp.asarray(p_comp)).tobytes()
+            fout.write(CHUNK_SIZE_STRUCT.pack(len(comp_bytes)))
+            fout.write(comp_bytes)
+
+        return bytes_read
+
+    def _gpu_decompress_chunks(
+        self,
+        fin,
+        fout,
+        algorithm: str,
+        original_size: int,
+        progress_callback: Optional[Callable] = None,
+        job_id: Optional[str] = None,
+    ) -> int:
+        """Decompress chunks with double-buffered CUDA streams and pinned memory."""
+        import cupy as cp
+        import numpy as np
+        from nvidia.nvcomp import Codec, Array
+
+        codec = Codec(algorithm=algorithm)
+
+        streams = [cp.cuda.Stream(non_blocking=True),
+                   cp.cuda.Stream(non_blocking=True)]
+
+        bytes_written = 0
+        buf_idx = 0
+        pending = None  # (stream, decompressed_array)
+
+        while True:
+            size_data = fin.read(CHUNK_SIZE_STRUCT.size)
+            if not size_data:
+                break
+            if len(size_data) < CHUNK_SIZE_STRUCT.size:
+                raise ValueError("Truncated chunk size field.")
+
+            (chunk_len,) = CHUNK_SIZE_STRUCT.unpack(size_data)
+            compressed_chunk = fin.read(chunk_len)
+            if len(compressed_chunk) < chunk_len:
+                raise ValueError("Truncated compressed chunk data.")
+
+            stream = streams[buf_idx]
+            np_pinned = _to_pinned_array(compressed_chunk)
+
+            with stream:
+                d_input = cp.asarray(np_pinned)
+                decompressed = codec.decode(Array(d_input))
+
+            # Flush previous result while GPU works
+            if pending is not None:
+                p_stream, p_dec = pending
+                p_stream.synchronize()
+                dec_bytes = cp.asnumpy(cp.asarray(p_dec)).tobytes()
+                fout.write(dec_bytes)
+                bytes_written += len(dec_bytes)
+
+            pending = (stream, decompressed)
+            buf_idx = 1 - buf_idx
+
+            if progress_callback is not None:
+                progress = min(bytes_written / original_size * 100, 100.0) if original_size else 100.0
+                progress_callback(job_id or "", round(progress, 1))
+
+        # Flush last pending
+        if pending is not None:
+            p_stream, p_comp = pending
+            p_stream.synchronize()
+            dec_bytes = cp.asnumpy(cp.asarray(p_comp)).tobytes()
+            fout.write(dec_bytes)
+            bytes_written += len(dec_bytes)
+
+        return bytes_written
 
     # ------------------------------------------------------------------
     # Internal helpers

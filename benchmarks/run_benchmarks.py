@@ -48,6 +48,15 @@ class BenchmarkResult:
     compression_ratio: float
     throughput_mbps: float
     notes: str = ""
+    chunk_count: Optional[int] = None
+    chunk_size_mb: Optional[float] = None
+    gpu_sync_overhead_ms: Optional[float] = None
+    latency_p50_ms: Optional[float] = None
+    latency_p95_ms: Optional[float] = None
+    latency_p99_ms: Optional[float] = None
+    peak_memory_host_mb: Optional[float] = None
+    peak_memory_gpu_mb: Optional[float] = None
+    iops: Optional[float] = None
 
     @property
     def input_size_mb(self) -> float:
@@ -676,6 +685,8 @@ def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[
             status = "[green]OK[/green]" if match else "[red]MISMATCH[/red]"
             console.print(f"{status} {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
 
+            roundtrip_time = comp_time + decomp_time
+            roundtrip_tp = (input_size / (1024 * 1024)) / roundtrip_time if roundtrip_time > 0 else 0
             results.append(BenchmarkResult(
                 test_name="roundtrip",
                 workload=f"{size_mb}MB_mixed",
@@ -683,10 +694,10 @@ def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[
                 processor=f"zstd_level{level}",
                 input_size_bytes=input_size,
                 output_size_bytes=comp_size,
-                elapsed_seconds=comp_time,
+                elapsed_seconds=roundtrip_time,
                 compression_ratio=ratio,
-                throughput_mbps=comp_tp,
-                notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+                throughput_mbps=roundtrip_tp,
+                notes=f"comp: {comp_tp:.0f} MB/s, decomp: {decomp_tp:.0f} MB/s, match: {match}",
             ))
     except ImportError:
         console.print("[yellow]  zstandard not installed[/yellow]")
@@ -721,6 +732,8 @@ def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[
     match = out_gz_dec.stat().st_size == input_size
     console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x")
 
+    gz_roundtrip_time = comp_time + decomp_time
+    gz_roundtrip_tp = (input_size / (1024 * 1024)) / gz_roundtrip_time if gz_roundtrip_time > 0 else 0
     results.append(BenchmarkResult(
         test_name="roundtrip",
         workload=f"{size_mb}MB_mixed",
@@ -728,22 +741,53 @@ def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[
         processor="gzip_level6",
         input_size_bytes=input_size,
         output_size_bytes=comp_size,
-        elapsed_seconds=comp_time,
+        elapsed_seconds=gz_roundtrip_time,
         compression_ratio=ratio,
-        throughput_mbps=comp_tp,
-        notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+        throughput_mbps=gz_roundtrip_tp,
+        notes=f"comp: {comp_tp:.0f} MB/s, decomp: {decomp_tp:.0f} MB/s, match: {match}",
     ))
 
     # nvCOMP GPU round-trip (if available)
+    # Clean up CPU test output files and reclaim memory before GPU tests.
+    # On Jetson unified memory, OS page cache from CPU I/O reduces GPU-visible
+    # free memory.  Removing temp files and dropping caches reclaims it.
+    import gc
+    gc.collect()
+    for _pat in ["rt_zstd_*.zst", "rt_zstd_*.bin", "rt_gzip.*"]:
+        for _f in tmpdir.glob(_pat):
+            try:
+                _f.unlink()
+            except OSError:
+                pass
+    # Attempt to drop page cache (needs root or sysctl)
+    try:
+        subprocess.run(["sudo", "-n", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches"],
+                        capture_output=True, timeout=5)
+    except Exception:
+        pass
+
     try:
         from nvidia.nvcomp import Codec, Array
+        from hammerio.encoders.bulk import _compute_gpu_chunk_size
         import cupy as cp
+        import numpy as np
 
+        # Release any CuPy memory from prior operations
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+
+        def _to_pinned(data: bytes):
+            """Copy bytes into pinned host memory for fast H2D transfer."""
+            pmem = cp.cuda.alloc_pinned_memory(len(data))
+            arr = np.frombuffer(pmem, dtype=np.uint8, count=len(data))
+            arr[:] = np.frombuffer(data, dtype=np.uint8)
+            return arr
+
+        gpu_free, gpu_total = cp.cuda.Device().mem_info
+        gpu_free_mb = int(gpu_free / (1024 * 1024))
+        CHUNK_SIZE = _compute_gpu_chunk_size(input_size, gpu_free_mb)
         console.print("  nvCOMP GPU LZ4 compress...", end=" ")
         codec = Codec(algorithm="lz4")
-
-        # Chunked processing — 256MB per chunk to avoid GPU OOM
-        CHUNK_SIZE = 256 * 1024 * 1024
         total_comp_size = 0
         chunk_count = 0
 
@@ -753,55 +797,119 @@ def benchmark_roundtrip(tmpdir: Path, size_mb: int = 100, source_file: Optional[
         cp.cuda.Stream.null.synchronize()
         del warmup
 
-        # Timed compress (chunked)
+        # Double-buffered streaming: only 2 pinned buffers at a time (not all chunks)
+        stream_a = cp.cuda.Stream(non_blocking=True)
+        stream_b = cp.cuda.Stream(non_blocking=True)
+        streams = [stream_a, stream_b]
+
+        # Allocate only 2 pinned buffers for double-buffering
+        pinned_bufs = [cp.cuda.alloc_pinned_memory(CHUNK_SIZE),
+                       cp.cuda.alloc_pinned_memory(CHUNK_SIZE)]
+
+        chunk_size_mb = CHUNK_SIZE / (1024 * 1024)
+
+        # Timed compress (pipelined with double-buffered pinned memory)
+        # Track sync overhead separately
         cp.cuda.Stream.null.synchronize()
         start = time.perf_counter()
+        sync_total = 0.0
         compressed_chunks = []
+        buf_idx = 0
+        pending = None  # (stream, compressed_array, chunk_len)
         with open(src, "rb") as f:
             while True:
                 chunk = f.read(CHUNK_SIZE)
                 if not chunk:
                     break
-                d_chunk = cp.frombuffer(bytearray(chunk), dtype=cp.uint8)
-                comp = codec.encode(Array(d_chunk))
-                cp.cuda.Stream.null.synchronize()
-                comp_arr = cp.asarray(comp)
-                total_comp_size += comp_arr.nbytes
-                compressed_chunks.append((comp, len(chunk)))
+
+                chunk_len = len(chunk)
+                stream = streams[buf_idx]
+                np_pinned = np.frombuffer(pinned_bufs[buf_idx], dtype=np.uint8, count=chunk_len)
+                np_pinned[:] = np.frombuffer(chunk, dtype=np.uint8)
+
+                # Launch async H2D + encode
+                with stream:
+                    d_chunk = cp.asarray(np_pinned)
+                    comp = codec.encode(Array(d_chunk))
+
+                # Flush previous result while GPU works on current
+                if pending is not None:
+                    p_stream, p_comp, p_len = pending
+                    sync_start = time.perf_counter()
+                    p_stream.synchronize()
+                    sync_total += time.perf_counter() - sync_start
+                    total_comp_size += cp.asarray(p_comp).nbytes
+                    compressed_chunks.append((p_comp, p_len))
+
+                pending = (stream, comp, chunk_len)
+                buf_idx = 1 - buf_idx
                 chunk_count += 1
-                del d_chunk
-        cp.cuda.Stream.null.synchronize()
+
+        # Flush last pending
+        if pending is not None:
+            p_stream, p_comp, p_len = pending
+            sync_start = time.perf_counter()
+            p_stream.synchronize()
+            sync_total += time.perf_counter() - sync_start
+            total_comp_size += cp.asarray(p_comp).nbytes
+            compressed_chunks.append((p_comp, p_len))
+
         comp_time = time.perf_counter() - start
         comp_tp = (input_size / (1024 * 1024)) / comp_time if comp_time > 0 else 0
+        gpu_sync_overhead_ms = sync_total * 1000
 
-        # Timed decompress (chunked)
+        # Timed decompress — process one chunk at a time to control GPU memory.
+        # Free all compress buffers first, then re-read compressed data from
+        # host-side copies to avoid holding everything on GPU simultaneously.
+        # Save compressed data to host for decompress phase
+        host_compressed = []
+        for comp, orig_len in compressed_chunks:
+            comp_bytes = cp.asnumpy(cp.asarray(comp)).tobytes()
+            host_compressed.append((comp_bytes, orig_len))
+        del compressed_chunks, pinned_bufs
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+        gc.collect()
+
         cp.cuda.Stream.null.synchronize()
         start = time.perf_counter()
         total_decomp = 0
-        for comp, orig_len in compressed_chunks:
-            dec = codec.decode(comp)
+        for comp_bytes, orig_len in host_compressed:
+            np_pinned = _to_pinned(comp_bytes)
+            d_comp = cp.asarray(np_pinned)
+            dec = codec.decode(Array(d_comp))
             cp.cuda.Stream.null.synchronize()
             total_decomp += cp.asarray(dec).nbytes
-            del dec
+            del d_comp, dec, np_pinned
+            cp.get_default_memory_pool().free_all_blocks()
+
         decomp_time = time.perf_counter() - start
         decomp_tp = (input_size / (1024 * 1024)) / decomp_time if decomp_time > 0 else 0
+        del host_compressed
 
         match = total_decomp == input_size
         ratio = input_size / total_comp_size if total_comp_size > 0 else 0
-        console.print(f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, {ratio:.2f}x ({chunk_count} chunks)")
-        del compressed_chunks
-
+        console.print(
+            f"[green]OK[/green] {comp_tp:.0f} MB/s compress, {decomp_tp:.0f} MB/s decompress, "
+            f"{ratio:.2f}x ({chunk_count} chunks × {chunk_size_mb:.0f}MB, "
+            f"sync {gpu_sync_overhead_ms:.0f}ms)"
+        )
+        gpu_roundtrip_time = comp_time + decomp_time
+        gpu_roundtrip_tp = (input_size / (1024 * 1024)) / gpu_roundtrip_time if gpu_roundtrip_time > 0 else 0
         results.append(BenchmarkResult(
             test_name="roundtrip",
             workload=f"{size_mb}MB_mixed",
             method="gpu",
             processor="nvcomp_lz4",
             input_size_bytes=input_size,
-            output_size_bytes=comp_size,
-            elapsed_seconds=comp_time,
+            output_size_bytes=total_comp_size,
+            elapsed_seconds=gpu_roundtrip_time,
             compression_ratio=ratio,
-            throughput_mbps=comp_tp,
-            notes=f"decomp: {decomp_tp:.0f} MB/s, match: {match}",
+            throughput_mbps=gpu_roundtrip_tp,
+            notes=f"comp: {comp_tp:.0f} MB/s, decomp: {decomp_tp:.0f} MB/s, match: {match}",
+            chunk_count=chunk_count,
+            chunk_size_mb=chunk_size_mb,
+            gpu_sync_overhead_ms=round(gpu_sync_overhead_ms, 1),
         ))
     except ImportError:
         pass
@@ -890,64 +998,541 @@ def benchmark_10gb(tmpdir: Path) -> list[BenchmarkResult]:
     console.print("\n[bold]10GB Stress Test Benchmark[/bold]")
 
     # Persistent cache — generate once, reuse forever
+    # v2: uses realistic mixed data (same generator as 1GB benchmark)
     cache_dir = Path.home() / ".cache" / "hammerio"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cache_dir / "benchmark_10gb.bin"
+    cached = cache_dir / "benchmark_10gb_v2.bin"
 
     if cached.exists() and cached.stat().st_size >= 9 * 1024 * 1024 * 1024:
         console.print(f"  Using cached 10GB file: {cached}")
         console.print(f"  Size: {cached.stat().st_size / (1024**3):.2f} GB")
     else:
-        size_bytes = 10 * 1024 * 1024 * 1024
-        console.print("  Generating 10 GB test file (one-time, cached for future runs)...")
-
-        # Fast generation: 1MB seed block repeated with variation
-        # ~200 MB/s write speed on NVMe
-        seed = bytearray(1024 * 1024)  # 1MB
-        # Mix: 25% CSV, 25% pattern, 25% random (real entropy), 25% binary
-        quarter = len(seed) // 4
-        csv_line = b"2026-04-05T12:00:00,SNR0042,23.456,67.89,1013.25,active,OK\n"
-        for i in range(quarter):
-            seed[i] = csv_line[i % len(csv_line)]
-        for i in range(quarter, quarter * 2):
-            seed[i] = i & 0xFF
-        # 25% actual random bytes (incompressible)
-        rand_block = os.urandom(quarter)
-        seed[quarter * 2 : quarter * 3] = rand_block
-        # 25% binary with structure (float-like)
-        import struct as _struct
-        float_count = quarter // 4
-        float_bytes = _struct.pack(f'{float_count}f', *((i * 0.001) for i in range(float_count)))
-        seed[quarter * 3:] = float_bytes[:quarter]
-
-        written = 0
-        with open(cached, "wb") as f:
-            while written < size_bytes:
-                # Vary each block: change CSV sensor IDs and random section
-                block_num = written // len(seed)
-                # Rotate CSV sensor IDs
-                sensor_id = f"SNR{block_num % 9999:04d}".encode()
-                seed[20:28] = sensor_id
-                # Vary the pattern section
-                seed[quarter] = block_num & 0xFF
-                seed[quarter + 1] = (block_num >> 8) & 0xFF
-                f.write(seed)
-                written += len(seed)
-
-                # Progress every 512MB
-                if written % (512 * 1024 * 1024) == 0:
-                    console.print(f"    {written / (1024**3):.1f} / 10.0 GB...")
-
+        console.print("  Generating 10 GB realistic test file (one-time, cached for future runs)...")
+        console.print("  Data mix: 25% CSV, 25% patterns, 25% semi-random, 25% true random")
+        # Use the same compressible generator as the 1GB benchmark
+        # for realistic compression ratios (target 1.8x-2.5x)
+        _generate_test_data(cached, 10 * 1024, data_type="compressible")
         console.print(f"  Generated: {cached.stat().st_size / (1024**3):.2f} GB")
         console.print(f"  Cached at: {cached}")
 
     return benchmark_roundtrip(tmpdir, source_file=cached)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enhanced benchmarks: in-memory, random I/O, latency, memory, scalability
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _percentiles(values: list[float]) -> tuple[float, float, float]:
+    """Return (p50, p95, p99) from a list of values."""
+    if not values:
+        return (0.0, 0.0, 0.0)
+    s = sorted(values)
+    n = len(s)
+    return (
+        s[int(n * 0.50)],
+        s[min(int(n * 0.95), n - 1)],
+        s[min(int(n * 0.99), n - 1)],
+    )
+
+
+def _get_host_memory_mb() -> float:
+    """Current process RSS in MB."""
+    import psutil
+    return psutil.Process().memory_info().rss / (1024 * 1024)
+
+
+def _get_gpu_memory_mb() -> float:
+    """Current GPU memory used in MB (0 if not available)."""
+    try:
+        import cupy as cp
+        free, total = cp.cuda.Device().mem_info
+        return (total - free) / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
+def benchmark_in_memory(tmpdir: Path, size_mb: int = 256) -> list[BenchmarkResult]:
+    """Pure in-memory compression benchmark — no disk I/O.
+
+    Loads data into RAM, times only compress/decompress.
+    Like lzbench methodology: multiple iterations, pure algorithm speed.
+    """
+    console.print(f"\n[bold]In-Memory Benchmark ({size_mb} MB — no disk I/O)[/bold]")
+    results: list[BenchmarkResult] = []
+
+    # Generate data in memory
+    console.print("  Generating in-memory test data...")
+    quarter = size_mb * 1024 * 1024 // 4
+    csv_line = b"2026-04-05T12:00:00,sensor_01,23.456,67.89,1013.25,active,OK\n"
+    text_block = (csv_line * (quarter // len(csv_line) + 1))[:quarter]
+    pattern = (bytes(range(256)) * (quarter // 256 + 1))[:quarter]
+    semi_random = bytes((b ^ 0xAA) & 0xFF for b in os.urandom(quarter))
+    raw_data = text_block + pattern + semi_random + os.urandom(quarter)
+    console.print(f"  Data ready: {len(raw_data) / (1024*1024):.0f} MB\n")
+
+    data_size = len(raw_data)
+    iterations = 3
+
+    # CPU zstd
+    try:
+        import zstandard as zstd
+        for level in [1, 3, 9]:
+            label = f"zstd-{level}"
+            console.print(f"  {label} (in-memory)...", end=" ")
+            cctx = zstd.ZstdCompressor(level=level, threads=-1)
+            dctx = zstd.ZstdDecompressor()
+
+            mem_before = _get_host_memory_mb()
+
+            # Compress — multiple iterations
+            comp_latencies: list[float] = []
+            compressed = b""
+            for _ in range(iterations):
+                start = time.perf_counter()
+                compressed = cctx.compress(raw_data)
+                comp_latencies.append(time.perf_counter() - start)
+
+            # Decompress — multiple iterations
+            decomp_latencies: list[float] = []
+            for _ in range(iterations):
+                start = time.perf_counter()
+                _ = dctx.decompress(compressed, max_output_size=data_size)
+                decomp_latencies.append(time.perf_counter() - start)
+
+            mem_peak = _get_host_memory_mb()
+
+            avg_comp = sum(comp_latencies) / len(comp_latencies)
+            avg_decomp = sum(decomp_latencies) / len(decomp_latencies)
+            comp_tp = (data_size / (1024 * 1024)) / avg_comp
+            decomp_tp = (data_size / (1024 * 1024)) / avg_decomp
+            ratio = data_size / len(compressed) if compressed else 0
+            p50_c, p95_c, p99_c = _percentiles([t * 1000 for t in comp_latencies])
+
+            console.print(
+                f"[green]OK[/green] comp: {comp_tp:.0f} MB/s, "
+                f"decomp: {decomp_tp:.0f} MB/s, ratio: {ratio:.2f}x"
+            )
+
+            roundtrip = avg_comp + avg_decomp
+            results.append(BenchmarkResult(
+                test_name="in_memory",
+                workload=f"{size_mb}MB_inmem",
+                method="cpu",
+                processor=f"zstd_level{level}",
+                input_size_bytes=data_size,
+                output_size_bytes=len(compressed),
+                elapsed_seconds=roundtrip,
+                compression_ratio=ratio,
+                throughput_mbps=(data_size / (1024 * 1024)) / roundtrip,
+                notes=f"comp: {comp_tp:.0f} MB/s, decomp: {decomp_tp:.0f} MB/s, iters: {iterations}",
+                latency_p50_ms=round(p50_c, 2),
+                latency_p95_ms=round(p95_c, 2),
+                latency_p99_ms=round(p99_c, 2),
+                peak_memory_host_mb=round(mem_peak - mem_before, 1) if mem_peak > mem_before else None,
+            ))
+    except ImportError:
+        console.print("  [yellow]zstandard not installed[/yellow]")
+
+    # GPU nvCOMP in-memory
+    try:
+        from nvidia.nvcomp import Codec, Array
+        import cupy as cp
+        import numpy as np
+
+        for algo in ["lz4", "zstd", "snappy"]:
+            console.print(f"  nvCOMP {algo} (in-memory)...", end=" ")
+            codec = Codec(algorithm=algo)
+
+            # Warmup
+            w = cp.zeros(1024 * 1024, dtype=cp.uint8)
+            _ = codec.encode(Array(w))
+            cp.cuda.Stream.null.synchronize()
+            del w, _
+
+            # Upload to GPU once
+            np_data = np.frombuffer(raw_data, dtype=np.uint8)
+            d_data = cp.asarray(np_data)
+            gpu_mem_before = _get_gpu_memory_mb()
+
+            # Compress iterations
+            comp_latencies = []
+            compressed_gpu = None
+            for _ in range(iterations):
+                cp.cuda.Stream.null.synchronize()
+                start = time.perf_counter()
+                compressed_gpu = codec.encode(Array(d_data))
+                cp.cuda.Stream.null.synchronize()
+                comp_latencies.append(time.perf_counter() - start)
+
+            comp_size = cp.asarray(compressed_gpu).nbytes
+            gpu_mem_peak = _get_gpu_memory_mb()
+
+            # Decompress iterations
+            decomp_latencies = []
+            for _ in range(iterations):
+                cp.cuda.Stream.null.synchronize()
+                start = time.perf_counter()
+                _ = codec.decode(compressed_gpu)
+                cp.cuda.Stream.null.synchronize()
+                decomp_latencies.append(time.perf_counter() - start)
+
+            del d_data, compressed_gpu
+            cp.get_default_memory_pool().free_all_blocks()
+
+            avg_comp = sum(comp_latencies) / len(comp_latencies)
+            avg_decomp = sum(decomp_latencies) / len(decomp_latencies)
+            comp_tp = (data_size / (1024 * 1024)) / avg_comp
+            decomp_tp = (data_size / (1024 * 1024)) / avg_decomp
+            ratio = data_size / comp_size if comp_size else 0
+            p50_c, p95_c, p99_c = _percentiles([t * 1000 for t in comp_latencies])
+
+            console.print(
+                f"[green]OK[/green] comp: {comp_tp:.0f} MB/s, "
+                f"decomp: {decomp_tp:.0f} MB/s, ratio: {ratio:.2f}x"
+            )
+
+            roundtrip = avg_comp + avg_decomp
+            results.append(BenchmarkResult(
+                test_name="in_memory",
+                workload=f"{size_mb}MB_inmem",
+                method="gpu",
+                processor=f"nvcomp_{algo}",
+                input_size_bytes=data_size,
+                output_size_bytes=comp_size,
+                elapsed_seconds=roundtrip,
+                compression_ratio=ratio,
+                throughput_mbps=(data_size / (1024 * 1024)) / roundtrip,
+                notes=f"comp: {comp_tp:.0f} MB/s, decomp: {decomp_tp:.0f} MB/s, iters: {iterations}",
+                latency_p50_ms=round(p50_c, 2),
+                latency_p95_ms=round(p95_c, 2),
+                latency_p99_ms=round(p99_c, 2),
+                peak_memory_gpu_mb=round(gpu_mem_peak - gpu_mem_before, 1) if gpu_mem_peak > gpu_mem_before else None,
+            ))
+
+    except ImportError:
+        pass
+    except Exception as e:
+        console.print(f"  [yellow]nvCOMP in-memory: {e}[/yellow]")
+
+    return results
+
+
+def benchmark_random_io(tmpdir: Path, size_mb: int = 256) -> list[BenchmarkResult]:
+    """Random I/O benchmark — measures random-access decompression performance.
+
+    Creates a compressed file, then randomly seeks and decompresses individual
+    chunks. Measures IOPS, bandwidth, and latency percentiles at 64KB and 1MB
+    block sizes. Like fio randread/randwrite patterns.
+    """
+    console.print(f"\n[bold]Random I/O Benchmark ({size_mb} MB)[/bold]")
+    results: list[BenchmarkResult] = []
+
+    # Generate source data
+    src = tmpdir / "random_io_data.bin"
+    if not src.exists():
+        console.print("  Generating test data...")
+        _generate_test_data(src, size_mb, data_type="compressible")
+
+    data_bytes = src.read_bytes()
+    data_size = len(data_bytes)
+
+    try:
+        import zstandard as zstd
+    except ImportError:
+        console.print("  [yellow]zstandard not installed — skipping[/yellow]")
+        return results
+
+    # Test at multiple block sizes (fio-style)
+    for block_label, block_size in [("64KB", 64 * 1024), ("1MB", 1024 * 1024)]:
+        console.print(f"\n  [cyan]Block size: {block_label}[/cyan]")
+        num_blocks = data_size // block_size
+
+        # Split data into blocks and compress each independently
+        cctx = zstd.ZstdCompressor(level=3, threads=-1)
+        dctx = zstd.ZstdDecompressor()
+
+        console.print(f"    Compressing {num_blocks} blocks...", end=" ")
+        compressed_blocks: list[bytes] = []
+        total_comp = 0
+        for i in range(num_blocks):
+            block = data_bytes[i * block_size : (i + 1) * block_size]
+            cb = cctx.compress(block)
+            compressed_blocks.append(cb)
+            total_comp += len(cb)
+        ratio = data_size / total_comp if total_comp else 0
+        console.print(f"[green]OK[/green] ({ratio:.2f}x)")
+
+        # --- Random read (decompress random blocks) ---
+        num_ops = min(1000, num_blocks)
+        indices = [random.randint(0, num_blocks - 1) for _ in range(num_ops)]
+
+        console.print(f"    Random read ({num_ops} ops)...", end=" ")
+        latencies: list[float] = []
+        bytes_read = 0
+        start_total = time.perf_counter()
+        for idx in indices:
+            start = time.perf_counter()
+            decompressed = dctx.decompress(compressed_blocks[idx], max_output_size=block_size)
+            latencies.append(time.perf_counter() - start)
+            bytes_read += len(decompressed)
+        elapsed = time.perf_counter() - start_total
+
+        p50, p95, p99 = _percentiles([t * 1000 for t in latencies])
+        iops_val = num_ops / elapsed
+        bw = bytes_read / (1024 * 1024) / elapsed
+
+        console.print(
+            f"[green]OK[/green] {iops_val:.0f} IOPS, {bw:.0f} MB/s, "
+            f"lat p50={p50:.2f}ms p95={p95:.2f}ms p99={p99:.2f}ms"
+        )
+
+        results.append(BenchmarkResult(
+            test_name="random_io",
+            workload=f"randread_{block_label}",
+            method="cpu",
+            processor="zstd_level3",
+            input_size_bytes=bytes_read,
+            output_size_bytes=total_comp,
+            elapsed_seconds=elapsed,
+            compression_ratio=ratio,
+            throughput_mbps=bw,
+            notes=f"ops: {num_ops}, block: {block_label}",
+            latency_p50_ms=round(p50, 3),
+            latency_p95_ms=round(p95, 3),
+            latency_p99_ms=round(p99, 3),
+            iops=round(iops_val, 0),
+        ))
+
+        # --- Random write (compress random blocks) ---
+        console.print(f"    Random write ({num_ops} ops)...", end=" ")
+        latencies = []
+        bytes_written = 0
+        start_total = time.perf_counter()
+        for idx in indices:
+            block = data_bytes[idx * block_size : (idx + 1) * block_size]
+            start = time.perf_counter()
+            _ = cctx.compress(block)
+            latencies.append(time.perf_counter() - start)
+            bytes_written += block_size
+        elapsed = time.perf_counter() - start_total
+
+        p50, p95, p99 = _percentiles([t * 1000 for t in latencies])
+        iops_val = num_ops / elapsed
+        bw = bytes_written / (1024 * 1024) / elapsed
+
+        console.print(
+            f"[green]OK[/green] {iops_val:.0f} IOPS, {bw:.0f} MB/s, "
+            f"lat p50={p50:.2f}ms p95={p95:.2f}ms p99={p99:.2f}ms"
+        )
+
+        results.append(BenchmarkResult(
+            test_name="random_io",
+            workload=f"randwrite_{block_label}",
+            method="cpu",
+            processor="zstd_level3",
+            input_size_bytes=bytes_written,
+            output_size_bytes=0,
+            elapsed_seconds=elapsed,
+            compression_ratio=ratio,
+            throughput_mbps=bw,
+            notes=f"ops: {num_ops}, block: {block_label}",
+            latency_p50_ms=round(p50, 3),
+            latency_p95_ms=round(p95, 3),
+            latency_p99_ms=round(p99, 3),
+            iops=round(iops_val, 0),
+        ))
+
+        # --- Mixed 70/30 read/write ---
+        console.print(f"    Mixed 70/30 R/W ({num_ops} ops)...", end=" ")
+        latencies = []
+        bytes_total = 0
+        start_total = time.perf_counter()
+        for i, idx in enumerate(indices):
+            start = time.perf_counter()
+            if i % 10 < 7:  # 70% reads
+                decompressed = dctx.decompress(compressed_blocks[idx], max_output_size=block_size)
+                bytes_total += len(decompressed)
+            else:  # 30% writes
+                block = data_bytes[idx * block_size : (idx + 1) * block_size]
+                _ = cctx.compress(block)
+                bytes_total += block_size
+            latencies.append(time.perf_counter() - start)
+        elapsed = time.perf_counter() - start_total
+
+        p50, p95, p99 = _percentiles([t * 1000 for t in latencies])
+        iops_val = num_ops / elapsed
+        bw = bytes_total / (1024 * 1024) / elapsed
+
+        console.print(
+            f"[green]OK[/green] {iops_val:.0f} IOPS, {bw:.0f} MB/s, "
+            f"lat p50={p50:.2f}ms p95={p95:.2f}ms p99={p99:.2f}ms"
+        )
+
+        results.append(BenchmarkResult(
+            test_name="random_io",
+            workload=f"mixed_70_30_{block_label}",
+            method="cpu",
+            processor="zstd_level3",
+            input_size_bytes=bytes_total,
+            output_size_bytes=0,
+            elapsed_seconds=elapsed,
+            compression_ratio=ratio,
+            throughput_mbps=bw,
+            notes=f"ops: {num_ops}, block: {block_label}, mix: 70r/30w",
+            latency_p50_ms=round(p50, 3),
+            latency_p95_ms=round(p95, 3),
+            latency_p99_ms=round(p99, 3),
+            iops=round(iops_val, 0),
+        ))
+
+    return results
+
+
+def benchmark_scalability(tmpdir: Path) -> list[BenchmarkResult]:
+    """Scalability sweep — test throughput at 1MB, 10MB, 100MB, 1GB.
+
+    Shows how throughput scales with data size and identifies the crossover
+    point where GPU beats CPU.
+    """
+    console.print("\n[bold]Scalability Sweep (1MB → 1GB)[/bold]")
+    results: list[BenchmarkResult] = []
+
+    sizes_mb = [1, 10, 100, 1024]
+
+    for size_mb in sizes_mb:
+        # Generate data
+        src = tmpdir / f"scale_{size_mb}mb.bin"
+        if not src.exists():
+            _generate_test_data(src, size_mb, data_type="compressible")
+
+        data = src.read_bytes() if size_mb <= 256 else None
+        data_size = src.stat().st_size
+
+        console.print(f"\n  [cyan]{size_mb} MB[/cyan]")
+
+        # CPU zstd-3
+        try:
+            import zstandard as zstd
+            cctx = zstd.ZstdCompressor(level=3, threads=-1)
+            dctx = zstd.ZstdDecompressor()
+
+            if data is not None:
+                start = time.perf_counter()
+                compressed = cctx.compress(data)
+                comp_time = time.perf_counter() - start
+                start = time.perf_counter()
+                _ = dctx.decompress(compressed, max_output_size=data_size)
+                decomp_time = time.perf_counter() - start
+                comp_size = len(compressed)
+            else:
+                out_comp = tmpdir / f"scale_{size_mb}mb.zst"
+                start = time.perf_counter()
+                with open(src, "rb") as fin, open(out_comp, "wb") as fout:
+                    cctx.copy_stream(fin, fout)
+                comp_time = time.perf_counter() - start
+                comp_size = out_comp.stat().st_size
+                out_dec = tmpdir / f"scale_{size_mb}mb.dec"
+                start = time.perf_counter()
+                with open(out_comp, "rb") as fin, open(out_dec, "wb") as fout:
+                    dctx.copy_stream(fin, fout)
+                decomp_time = time.perf_counter() - start
+
+            roundtrip = comp_time + decomp_time
+            ratio = data_size / comp_size if comp_size else 0
+            tp = (data_size / (1024 * 1024)) / roundtrip
+
+            console.print(
+                f"    CPU zstd-3: {tp:.0f} MB/s roundtrip, "
+                f"{(data_size/(1024*1024))/comp_time:.0f} MB/s comp, "
+                f"{(data_size/(1024*1024))/decomp_time:.0f} MB/s decomp, "
+                f"{ratio:.2f}x"
+            )
+
+            results.append(BenchmarkResult(
+                test_name="scalability",
+                workload=f"{size_mb}MB",
+                method="cpu",
+                processor="zstd_level3",
+                input_size_bytes=data_size,
+                output_size_bytes=comp_size,
+                elapsed_seconds=roundtrip,
+                compression_ratio=ratio,
+                throughput_mbps=tp,
+                notes=f"comp: {(data_size/(1024*1024))/comp_time:.0f} MB/s, decomp: {(data_size/(1024*1024))/decomp_time:.0f} MB/s",
+            ))
+        except ImportError:
+            pass
+
+        # GPU nvCOMP LZ4
+        try:
+            from nvidia.nvcomp import Codec, Array
+            import cupy as cp
+            import numpy as np
+
+            codec = Codec(algorithm="lz4")
+
+            if data is not None:
+                np_data = np.frombuffer(data, dtype=np.uint8)
+            else:
+                np_data = np.fromfile(str(src), dtype=np.uint8)
+
+            d_data = cp.asarray(np_data)
+
+            # Compress
+            cp.cuda.Stream.null.synchronize()
+            start = time.perf_counter()
+            compressed_gpu = codec.encode(Array(d_data))
+            cp.cuda.Stream.null.synchronize()
+            comp_time = time.perf_counter() - start
+
+            comp_size = cp.asarray(compressed_gpu).nbytes
+
+            # Decompress
+            cp.cuda.Stream.null.synchronize()
+            start = time.perf_counter()
+            _ = codec.decode(compressed_gpu)
+            cp.cuda.Stream.null.synchronize()
+            decomp_time = time.perf_counter() - start
+
+            del d_data, compressed_gpu
+            cp.get_default_memory_pool().free_all_blocks()
+
+            roundtrip = comp_time + decomp_time
+            ratio = data_size / comp_size if comp_size else 0
+            tp = (data_size / (1024 * 1024)) / roundtrip
+
+            console.print(
+                f"    GPU LZ4:    {tp:.0f} MB/s roundtrip, "
+                f"{(data_size/(1024*1024))/comp_time:.0f} MB/s comp, "
+                f"{(data_size/(1024*1024))/decomp_time:.0f} MB/s decomp, "
+                f"{ratio:.2f}x"
+            )
+
+            results.append(BenchmarkResult(
+                test_name="scalability",
+                workload=f"{size_mb}MB",
+                method="gpu",
+                processor="nvcomp_lz4",
+                input_size_bytes=data_size,
+                output_size_bytes=comp_size,
+                elapsed_seconds=roundtrip,
+                compression_ratio=ratio,
+                throughput_mbps=tp,
+                notes=f"comp: {(data_size/(1024*1024))/comp_time:.0f} MB/s, decomp: {(data_size/(1024*1024))/decomp_time:.0f} MB/s",
+            ))
+        except ImportError:
+            pass
+        except Exception as e:
+            console.print(f"    [yellow]GPU: {e}[/yellow]")
+
+    return results
+
+
 def run_all_benchmarks(
     quick: bool = False,
     large: bool = False,
     huge: bool = False,
+    bench_type: str = "all",
     output_path: str = "benchmarks/results/benchmark.json",
 ) -> BenchmarkSuite:
     """Run the compression benchmark suite.
@@ -955,6 +1540,13 @@ def run_all_benchmarks(
     Args:
         quick: Quick mode (100MB test data)
         large: Large file mode (1GB+ test data)
+        huge: 10GB stress test
+        bench_type: Benchmark type to run. One of:
+            "all"        — run roundtrip + in-memory + random-io + scalability
+            "roundtrip"  — sequential compress/decompress (default behavior)
+            "memory"     — in-memory only (no disk I/O), pure algorithm speed
+            "random-io"  — random read/write/mixed I/O patterns
+            "scale"      — scalability sweep (1MB → 1GB)
         output_path: Path for JSON results
     """
     from hammerio.core.hardware import detect_hardware
@@ -969,6 +1561,9 @@ def run_all_benchmarks(
         mode_label = "Quick (100MB)"
     else:
         mode_label = "Standard (500MB)"
+
+    if bench_type != "all" and bench_type != "roundtrip":
+        mode_label += f" [{bench_type}]"
 
     console.print(Panel(
         f"[bold]HammerIO Benchmark Suite[/bold]\n"
@@ -998,16 +1593,37 @@ def run_all_benchmarks(
     else:
         tmpdir_base = None  # system default /tmp
 
+    run_roundtrip = bench_type in ("all", "roundtrip")
+    run_memory = bench_type in ("all", "memory")
+    run_random = bench_type in ("all", "random-io")
+    run_scale = bench_type in ("all", "scale")
+
     with tempfile.TemporaryDirectory(prefix="hammerio_bench_", dir=tmpdir_base) as tmpdir:
         tmp = Path(tmpdir)
 
-        if huge:
-            suite.results.extend(benchmark_10gb(tmp))
-        elif large:
-            suite.results.extend(benchmark_1gb(tmp))
-        else:
-            size = 100 if quick else 500
-            suite.results.extend(benchmark_roundtrip(tmp, size_mb=size))
+        # Roundtrip benchmarks (original behavior)
+        if run_roundtrip:
+            if huge:
+                suite.results.extend(benchmark_10gb(tmp))
+            elif large:
+                suite.results.extend(benchmark_1gb(tmp))
+            else:
+                size = 100 if quick else 500
+                suite.results.extend(benchmark_roundtrip(tmp, size_mb=size))
+
+        # In-memory benchmark (pure algorithm speed, no disk I/O)
+        if run_memory:
+            mem_size = 64 if quick else 256
+            suite.results.extend(benchmark_in_memory(tmp, size_mb=mem_size))
+
+        # Random I/O benchmark (IOPS, latency percentiles)
+        if run_random:
+            rio_size = 64 if quick else 256
+            suite.results.extend(benchmark_random_io(tmp, size_mb=rio_size))
+
+        # Scalability sweep (1MB → 1GB throughput curve)
+        if run_scale:
+            suite.results.extend(benchmark_scalability(tmp))
 
     # Summary
     gpu_results = [r for r in suite.results if r.method == "gpu"]
