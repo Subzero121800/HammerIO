@@ -38,7 +38,7 @@ COMMERCIAL USE
     - Use HammerIO in a SaaS platform
     - OEM HammerIO into hardware products
 
-  Commercial licenses: joe@resilientmindai.com
+  Commercial licenses: Joseph@ResilientMindAI.com
   Details: https://hammerio.dev/license
 
 DISCLAIMER

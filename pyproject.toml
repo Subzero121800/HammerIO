@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Joseph C McGinty Jr", email = "joe@resilientmindai.com"},
+    {name = "Joseph C McGinty Jr", email = "Joseph@ResilientMindAI.com"},
 ]
 keywords = [
     "compression", "gpu", "nvcomp", "jetson",

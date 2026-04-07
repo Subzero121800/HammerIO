@@ -239,7 +239,7 @@ Licensed under the Apache License, Version 2.0
 
 See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
 
-**Contact:** [joe@resilientmindai.com](mailto:joe@resilientmindai.com) | [resilientmindai.com](https://resilientmindai.com)
+**Contact:** [Joseph@ResilientMindAI.com](mailto:Joseph@ResilientMindAI.com) | [resilientmindai.com](https://resilientmindai.com)
 
 ---
 
