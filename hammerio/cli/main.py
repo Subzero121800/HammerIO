@@ -300,6 +300,23 @@ def benchmark(
         console.print(f"[red]Benchmark error:[/red] {e}")
 
 
+@app.command(name="install-desktop")
+def install_desktop(
+    remove: bool = typer.Option(False, "--remove", "--uninstall",
+        help="Remove desktop integration instead of installing"),
+) -> None:
+    """Install right-click compress/decompress into your file manager.
+
+    Adds 'HammerIO: Compress (GPU)' and 'HammerIO: Decompress' to the
+    right-click context menu in Nautilus, Nemo, Thunar, and the generic
+    'Open With' menu.
+
+    Uninstall with: hammer install-desktop --remove
+    """
+    from hammerio.cli.desktop import install
+    install(remove=remove)
+
+
 @app.command()
 def info(
     hardware: bool = typer.Option(False, "--hardware", "-hw", help="Show hardware profile"),
