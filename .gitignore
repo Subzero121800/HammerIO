@@ -9,6 +9,7 @@ __pycache__/
 dist/
 build/
 wheels/
+UNKNOWN.egg-info/
 
 # Virtual environments
 .venv/
@@ -39,15 +40,29 @@ htmlcov/
 .env
 .env.*
 credentials.json
+.pypirc
 
 # Build artifacts & temporary files
 build_logs/
-hammerio.egg-info/
+
+# PyPI publish wizard artifacts
+publish_report_*.md
+publish_wizard.log
+
+# Benchmark cached data (large generated files)
+benchmarks/tmp/
 
 # Media / test artifacts (large files)
 *.mp4
 *.mp4.lz4
 *.mp4.zst
+*.hmio
+*.bin
+!benchmarks/results/*.bin
+
+# Compressed test output
+*.zst
+*.lz4
 
 # GitHub Actions (no workflow automation)
 .github/
