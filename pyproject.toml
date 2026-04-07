@@ -5,25 +5,29 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hammerio"
 version = "1.0.0"
-description = "GPU where it matters. CPU where it doesn't. Zero configuration."
+description = "GPU-accelerated compression for edge AI. GPU where it matters. CPU where it doesn't."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Joseph C McGinty Jr", email = "contact@resilientmindai.com"},
+    {name = "Joseph C McGinty Jr", email = "joe@resilientmindai.com"},
 ]
-keywords = ["cuda", "compression", "jetson", "nvenc", "gpu", "media", "edge-ai"]
+keywords = [
+    "compression", "gpu", "nvcomp", "jetson",
+    "edge-ai", "zstd", "lz4", "cuda",
+    "hammerio", "resilientmind",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Multimedia :: Video",
-    "Topic :: System :: Archiving :: Compression",
     "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Archiving :: Compression",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Development Status :: 5 - Production/Stable",
 ]
 
 dependencies = [
@@ -34,39 +38,26 @@ dependencies = [
     "psutil>=5.9.0",
     "toml>=0.10.0",
     "aiofiles>=23.0",
+    "watchdog>=3.0.0",
+    "tqdm>=4.0.0",
 ]
 
 [project.optional-dependencies]
-gpu = [
-    "opencv-python>=4.8.0",
-    "pynvml>=11.5.0",
-]
-ml = [
-    "torch>=2.0.0",
-]
-web = [
-    "flask>=3.0.0",
-    "flask-socketio>=5.3.0",
-]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=4.1.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
-    "mypy>=1.5.0",
-    "pre-commit>=3.4.0",
-]
-all = ["hammerio[gpu,ml,web,dev]"]
+gpu = ["opencv-python>=4.8.0", "pynvml>=11.5.0"]
+jetson = ["jetson-stats>=4.0.0"]
+web = ["flask>=3.0.0", "flask-socketio>=5.3.0"]
+dev = ["pytest>=7.4.0", "build", "twine"]
+all = ["hammerio[gpu,jetson,web,dev]"]
+
+[project.urls]
+Homepage = "https://hammerio.dev"
+Documentation = "https://hammerio.dev/docs"
+Repository = "https://github.com/Subzero121800/HammerIO"
+"Bug Tracker" = "https://github.com/Subzero121800/HammerIO/issues"
+"Commercial License" = "https://hammerio.dev/license"
 
 [project.scripts]
 hammer = "hammerio.cli.main:app"
-
-[project.urls]
-Homepage = "https://resilientmindai.com"
-Documentation = "https://github.com/Subzero121800/HammerIO/tree/main/docs"
-Repository = "https://github.com/Subzero121800/HammerIO"
-Issues = "https://github.com/Subzero121800/HammerIO/issues"
 
 [tool.setuptools.packages.find]
 include = ["hammerio*"]
@@ -81,12 +72,6 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
