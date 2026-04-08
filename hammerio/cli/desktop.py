@@ -503,7 +503,6 @@ def install(remove: bool = False) -> None:
         f"Categories=Utility;Archiving;\n"
         f"MimeType=application/x-hammerio;application/zstd;application/gzip;"
         f"application/x-bzip2;application/x-lz4;\n"
-        f"NoDisplay=true\n"
     )
     table.add_row("Open With (.desktop)", "[green]Installed[/green]",
                    "Right-click > Open With")
@@ -513,6 +512,15 @@ def install(remove: bool = False) -> None:
         ["update-desktop-database", str(_APPS_DIR)],
         capture_output=True, timeout=10,
     )
+
+    # Set HammerIO as the default app for .hammer files
+    try:
+        subprocess.run(
+            ["xdg-mime", "default", "hammerio-decompress.desktop", "application/x-hammerio"],
+            capture_output=True, timeout=10,
+        )
+    except FileNotFoundError:
+        pass
 
     console.print(table)
 

@@ -5,6 +5,38 @@ All notable changes to HammerIO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Streaming GPU Compression
+
+### Added
+- hammerio/streaming.py — new streaming module
+- StreamingGPUCompressor class for single file
+  streaming compression and decompression
+- compress_directory_streaming() for directory
+  compression via tar pipe without temp files
+- --stream flag on compress and decompress commands
+- --chunk-mb flag for explicit chunk size control
+  (0 = auto-detect from available memory)
+- Auto-streaming: directories >8GB and files
+  exceeding 75% of available memory automatically
+  use streaming mode without requiring --stream flag
+- Dynamic chunk sizing based on unified memory
+  availability via tegrastats + /proc/meminfo fallback
+
+### Fixed
+- GPU OOM on large files and directories
+  (previously: 63GB directory failed with
+  "GPU out of memory at 0 MB read")
+- Memory usage now constant at chunk_size regardless
+  of input size
+
+### Performance
+- Streaming throughput within 5-10% of non-streaming
+  on same hardware due to pipelined IO
+- tar → GPU compress pipeline eliminates intermediate
+  disk write for directory compression
+- Pinned GPU buffer allocated once per compressor
+  instance, reused per chunk (no repeated alloc/free)
+
 ## [1.0.0] - 2026-04-05
 
 ### Added

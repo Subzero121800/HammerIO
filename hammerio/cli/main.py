@@ -67,23 +67,135 @@ def compress(
     algo: Optional[str] = typer.Option(None, "--algo", "-a", help="Force algorithm (zstd, lz4, gzip, zip, bzip2)"),
     quality: QualityPreset = typer.Option(QualityPreset.balanced, "--quality", "-q", help="Quality preset"),
     workers: int = typer.Option(4, "--workers", "-w", help="Parallel workers for batch"),
+    stream: bool = typer.Option(False, "--stream", help="Enable streaming compression. Fixes OOM on large files/directories. Constant memory usage regardless of input size."),
+    chunk_mb: int = typer.Option(0, "--chunk-mb", help="Chunk size in MB for streaming mode. 0 = auto-detect based on available memory. Range: 64-2048."),
 ) -> None:
     """Compress a file or directory using optimal GPU/CPU routing."""
     try:
-        from hammerio.core.router import JobRouter
-
-        with console.status("[bold green]Detecting hardware..."):
-            router = JobRouter(quality=quality.value, force_mode=mode.value if mode != CompressMode.auto else None)
-
         input_p = Path(input_path)
         if not input_p.exists():
             console.print(f"[red]Error:[/red] Input not found: {input_path}")
             raise typer.Exit(1)
 
+        is_dir = input_p.is_dir()
+
+        # Auto-enable streaming for large inputs
+        if not stream:
+            if is_dir:
+                dir_size_gb = sum(
+                    f.stat().st_size for f in input_p.rglob("*")
+                    if f.is_file() and not f.is_symlink()
+                ) / (1024 ** 3)
+                if dir_size_gb > 8.0:
+                    stream = True
+                    if chunk_mb == 0:
+                        from hammerio.streaming import choose_chunk_size_mb
+                        chunk_mb = choose_chunk_size_mb()
+                    console.print(
+                        f"[yellow]Auto-enabled streaming for {dir_size_gb:.1f}GB directory. "
+                        f"Chunk size: {chunk_mb}MB[/yellow]"
+                    )
+            else:
+                from hammerio.streaming import get_available_unified_memory_mb
+                file_size_mb = input_p.stat().st_size / (1024 ** 2)
+                available_mb = get_available_unified_memory_mb()
+                if file_size_mb > available_mb * 0.75:
+                    stream = True
+                    console.print(
+                        f"[yellow]Auto-enabled streaming: {file_size_mb:.0f}MB file, "
+                        f"{available_mb}MB available memory.[/yellow]"
+                    )
+
+        # ── Streaming path ──
+        if stream:
+            from hammerio.streaming import (
+                StreamingGPUCompressor,
+                compress_directory_streaming,
+                choose_chunk_size_mb,
+            )
+
+            chunk_size = chunk_mb if chunk_mb > 0 else choose_chunk_size_mb()
+
+            console.print(Panel(
+                f"{'Directory' if is_dir else 'File'}: {input_p}\n"
+                f"Mode: streaming\n"
+                f"Chunk size: {chunk_size}MB | Memory: constant",
+                title="[bold cyan]Streaming Compression[/bold cyan]",
+                border_style="cyan",
+            ))
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}", justify="left"),
+                BarColumn(bar_width=20),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("elapsed"),
+                TimeElapsedColumn(),
+                TextColumn("eta"),
+                TimeRemainingColumn(),
+                console=console,
+                expand=False,
+            ) as progress:
+                task = progress.add_task("Streaming...", total=100)
+
+                def _stream_progress(done: int, total: int) -> None:
+                    if total > 0:
+                        pct = min(done / total * 100, 100.0)
+                        progress.update(task, completed=pct)
+
+                if is_dir:
+                    out_path = (
+                        Path(output) / (input_p.name + ".hammer")
+                        if output and Path(output).is_dir()
+                        else Path(output) if output
+                        else input_p.with_suffix(".hammer")
+                    )
+                    metrics = compress_directory_streaming(
+                        input_p, out_path,
+                        chunk_mb=chunk_size,
+                        progress_callback=_stream_progress,
+                    )
+                else:
+                    compressor = StreamingGPUCompressor(
+                        chunk_mb=chunk_size,
+                        progress_callback=_stream_progress,
+                    )
+                    out_path = (
+                        Path(output) if output
+                        else input_p.with_suffix(".hammer")
+                    )
+                    metrics = compressor.compress_file(input_p, out_path)
+
+                progress.update(task, completed=100)
+
+            # Show streaming results
+            results_table = Table(title="Streaming Compression Result", show_header=True)
+            results_table.add_column("Metric", justify="left")
+            results_table.add_column("Value", justify="right")
+            results_table.add_row("Input", str(input_p))
+            results_table.add_row("Output", str(out_path))
+            results_table.add_row("Input Size", f"{metrics['input_size'] / (1024**3):.2f} GB")
+            results_table.add_row("Output Size", f"{metrics['output_size'] / (1024**3):.2f} GB")
+            results_table.add_row("Ratio", f"{metrics['ratio']:.2f}x")
+            results_table.add_row("Savings", f"{metrics['savings_pct']:.1f}%")
+            results_table.add_row("Time", f"{metrics['elapsed_s']:.1f}s")
+            results_table.add_row("Throughput", f"{metrics['throughput_mbps']:.1f} MB/s")
+            results_table.add_row("Chunks", str(metrics["chunks"]))
+            results_table.add_row("Chunk Size", f"{metrics['chunk_mb']}MB")
+            results_table.add_row("Processor", metrics["processor"])
+            console.print(results_table)
+            return
+
+        # ── Standard (non-streaming) path ──
+        from hammerio.core.router import JobRouter
+
+        with console.status("[bold green]Detecting hardware..."):
+            router = JobRouter(quality=quality.value, force_mode=mode.value if mode != CompressMode.auto else None)
+
         # Show routing decision — for directories, show a lightweight
         # summary instead of profiling every file (which is very slow
         # on large trees).
-        if input_p.is_dir():
+        if is_dir:
             file_count = sum(1 for _ in input_p.rglob("*") if _.is_file())
             total_mb = sum(
                 f.stat().st_size for f in input_p.rglob("*") if f.is_file()
@@ -103,7 +215,6 @@ def compress(
         ))
 
         # Execute with progress
-        is_dir = input_p.is_dir()
         task_label = "Packing..." if is_dir else "Compressing..."
         with Progress(
             SpinnerColumn(),
@@ -149,20 +260,85 @@ def compress(
 def decompress(
     input_path: str = typer.Argument(..., help="File to decompress"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output path"),
+    stream: bool = typer.Option(False, "--stream", help="Force streaming decompression mode."),
+    chunk_mb: int = typer.Option(0, "--chunk-mb", help="Chunk size in MB for streaming mode. 0 = auto-detect."),
 ) -> None:
     """Decompress a HammerIO-compressed file."""
     try:
-        from hammerio.encoders.bulk import BulkEncoder
-        from hammerio.encoders.general import GeneralEncoder
-        from hammerio.core.hardware import detect_hardware
-
         input_p = Path(input_path)
         if not input_p.exists():
             console.print(f"[red]Error:[/red] File not found: {input_path}")
             raise typer.Exit(1)
 
+        # Auto-detect streaming format
+        from hammerio.streaming import MAGIC as STREAMING_MAGIC
+        with open(input_p, "rb") as f:
+            file_magic = f.read(8)
+        is_streaming_format = file_magic == STREAMING_MAGIC
+
+        if stream or is_streaming_format:
+            if is_streaming_format and not stream:
+                console.print("[yellow]Detected HammerIO streaming format. Using streaming decompressor.[/yellow]")
+
+            from hammerio.streaming import StreamingGPUCompressor, choose_chunk_size_mb
+
+            chunk_size = chunk_mb if chunk_mb > 0 else choose_chunk_size_mb()
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}", justify="left"),
+                BarColumn(bar_width=20),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("elapsed"),
+                TimeElapsedColumn(),
+                TextColumn("eta"),
+                TimeRemainingColumn(),
+                console=console,
+                expand=False,
+            ) as progress:
+                task = progress.add_task("Decompressing...", total=100)
+
+                def _stream_progress(done: int, total: int) -> None:
+                    if total > 0:
+                        pct = min(done / total * 100, 100.0)
+                        progress.update(task, completed=pct)
+
+                compressor = StreamingGPUCompressor(
+                    chunk_mb=chunk_size,
+                    progress_callback=_stream_progress,
+                )
+
+                out_path = Path(output) if output else input_p.with_suffix("")
+                if out_path.is_dir():
+                    out_path = out_path / input_p.stem
+
+                metrics = compressor.decompress_file(input_p, out_path)
+                progress.update(task, completed=100)
+
+            input_size = input_p.stat().st_size
+            results_table = Table(title="Decompression Result", show_header=True)
+            results_table.add_column("Metric", justify="left")
+            results_table.add_column("Value", justify="right")
+            results_table.add_row("Input", str(input_p))
+            results_table.add_row("Output", str(out_path))
+            results_table.add_row("Input Size", _human_size(input_size))
+            results_table.add_row("Output Size", _human_size(metrics["output_size"]))
+            results_table.add_row("Ratio", f"{metrics['output_size'] / input_size:.2f}x" if input_size > 0 else "N/A")
+            results_table.add_row("Time", f"{metrics['elapsed_s']:.2f}s")
+            results_table.add_row("Throughput", f"{metrics['throughput_mbps']:.1f} MB/s")
+            results_table.add_row("Processor", metrics["processor"])
+            console.print(results_table)
+            return
+
+        # Standard (non-streaming) decompression
+        from hammerio.encoders.bulk import BulkEncoder
+        from hammerio.encoders.general import GeneralEncoder
+        from hammerio.core.hardware import detect_hardware
+
         hw = detect_hardware()
         ext = input_p.suffix.lower()
+        input_size = input_p.stat().st_size
+        start_time = time.time()
 
         with console.status("[bold green]Decompressing..."):
             if ext == ".hammer":
@@ -179,7 +355,27 @@ def decompress(
                 console.print(f"[red]Error:[/red] Unknown format: {ext}")
                 raise typer.Exit(1)
 
-            console.print(f"[green]Decompressed:[/green] {out}")
+        elapsed = time.time() - start_time
+        out_path = Path(out)
+        output_size = 0
+        if out_path.is_file():
+            output_size = out_path.stat().st_size
+        elif out_path.is_dir():
+            output_size = sum(f.stat().st_size for f in out_path.rglob("*") if f.is_file())
+        throughput = (output_size / elapsed / (1024 * 1024)) if elapsed > 0 else 0
+
+        results_table = Table(title="Decompression Result", show_header=True)
+        results_table.add_column("Metric", justify="left")
+        results_table.add_column("Value", justify="right")
+        results_table.add_row("Input", str(input_p))
+        results_table.add_row("Output", str(out))
+        results_table.add_row("Input Size", _human_size(input_size))
+        results_table.add_row("Output Size", _human_size(output_size))
+        results_table.add_row("Ratio", f"{output_size / input_size:.2f}x" if input_size > 0 else "N/A")
+        results_table.add_row("Time", f"{elapsed:.2f}s")
+        results_table.add_row("Throughput", f"{throughput:.1f} MB/s")
+        results_table.add_row("Processor", ext.lstrip("."))
+        console.print(results_table)
     except typer.Exit:
         raise
     except Exception as exc:
