@@ -23,7 +23,15 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
 app = typer.Typer(
@@ -72,26 +80,50 @@ def compress(
             console.print(f"[red]Error:[/red] Input not found: {input_path}")
             raise typer.Exit(1)
 
-        # Show routing decision
+        # Show routing decision — for directories, show a lightweight
+        # summary instead of profiling every file (which is very slow
+        # on large trees).
+        if input_p.is_dir():
+            file_count = sum(1 for _ in input_p.rglob("*") if _.is_file())
+            total_mb = sum(
+                f.stat().st_size for f in input_p.rglob("*") if f.is_file()
+            ) / (1024 * 1024)
+            route_info = (
+                f"Directory: {input_p} ({file_count} files, {total_mb:.1f} MB)\n"
+                f"Mode: {mode.value}\n"
+                f"Strategy: tar → compress"
+            )
+        else:
+            with console.status("[bold green]Analyzing input..."):
+                route_info = router.explain_route(input_p)
         console.print(Panel(
-            router.explain_route(input_p),
+            route_info,
             title="[bold cyan]Routing Decision[/bold cyan]",
             border_style="cyan",
         ))
 
         # Execute with progress
+        is_dir = input_p.is_dir()
+        task_label = "Packing..." if is_dir else "Compressing..."
         with Progress(
             SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
+            TextColumn("[progress.description]{task.description}", justify="left"),
+            BarColumn(bar_width=20),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("elapsed"),
             TimeElapsedColumn(),
+            TextColumn("eta"),
+            TimeRemainingColumn(),
             console=console,
+            expand=False,
         ) as progress:
-            task = progress.add_task("Compressing...", total=100)
+            task = progress.add_task(task_label, total=100)
 
             def _progress_cb(job_id: str, pct: float) -> None:
-                progress.update(task, completed=pct)
+                if is_dir and pct > 50:
+                    progress.update(task, description="Compressing...", completed=pct)
+                else:
+                    progress.update(task, completed=pct)
 
             router.set_progress_callback(_progress_cb)
 

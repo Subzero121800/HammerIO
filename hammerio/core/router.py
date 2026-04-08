@@ -179,12 +179,15 @@ class JobRouter:
         # --- File profiling with timing ---
         profile_start = time.time()
         if input_path.is_dir():
-            batch = profile_directory(input_path)
-            # Use dominant category for routing
-            if batch.files:
-                fp = batch.files[0]  # Route based on first file, batch handled later
-            else:
+            # Only profile the first file for routing — scanning the entire
+            # directory tree is prohibitively slow for large directories and
+            # the result is only used to pick the compression mode anyway.
+            first_file = next(
+                (f for f in input_path.rglob("*") if f.is_file()), None,
+            )
+            if first_file is None:
                 raise ValueError(f"Empty directory: {input_path}")
+            fp = profile_file(first_file)
         elif input_path.is_file():
             fp = profile_file(input_path)
         else:
@@ -200,6 +203,18 @@ class JobRouter:
         recommend_start = time.time()
         effective_mode = mode or self.force_mode
         rec = self._get_recommendation(fp, effective_mode, algorithm)
+
+        # Directories are always tar'd then compressed as a single archive.
+        # Override passthrough/none since the tar itself is compressible even
+        # if individual files inside are already compressed.
+        if input_path.is_dir() and (rec.algorithm in ("none", "") or rec.mode.value == "passthrough"):
+            rec.algorithm = algorithm or "zstd"
+            if self.hardware.has_nvcomp and effective_mode != "cpu":
+                rec.mode = CompressionMode.GPU_NVCOMP
+                rec.reason = f"Directory archive → nvCOMP {rec.algorithm}"
+            else:
+                rec.mode = CompressionMode.CPU_ZSTD
+                rec.reason = f"Directory archive → CPU {rec.algorithm}"
         recommend_elapsed_ms = (time.time() - recommend_start) * 1000
         logger.info(
             "Hardware detection / recommendation took %.3f ms",
@@ -211,6 +226,11 @@ class JobRouter:
             output_path = self._auto_output_path(input_path, rec)
         else:
             output_path = Path(output_path).resolve()
+            # If -o points to an existing directory, place the output
+            # file inside it (e.g. -o /dest/ → /dest/MyFolder.hammer)
+            if output_path.is_dir():
+                out_name = input_path.name + ".hammer"
+                output_path = output_path / out_name
 
         route_elapsed_ms = (time.time() - route_start) * 1000
 

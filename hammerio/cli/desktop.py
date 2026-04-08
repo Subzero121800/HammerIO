@@ -46,6 +46,9 @@ _ACTION_SCRIPT = r'''#!/usr/bin/env bash
 # Single file:  compresses directly -> file.zst
 # Multiple files: creates tar archive -> selection.tar.zst
 #
+# Ensure hammer is on PATH (pip --user installs to ~/.local/bin)
+export PATH="$HOME/.local/bin:$PATH"
+
 # Usage: hammerio-action.sh <compress|decompress|analyze> <file1> [file2] ...
 
 ACTION="${1:-compress}"
@@ -61,10 +64,19 @@ notify() {
 
 show_progress() {
     if command -v zenity &>/dev/null; then
-        zenity --progress --title="HammerIO" --text="$1" --pulsate --auto-close --no-cancel 2>/dev/null &
+        zenity --progress --title="HammerIO" --text="$1" --percentage=0 --auto-close --no-cancel --width=350 2>/dev/null &
         echo $!
     else
         echo ""
+    fi
+}
+
+update_progress() {
+    # Feed percentage to zenity via /proc/$PID/fd/0
+    local pid="$1" pct="$2" text="$3"
+    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+        echo "$pct" > /proc/$pid/fd/0 2>/dev/null || true
+        [ -n "$text" ] && echo "# $text" > /proc/$pid/fd/0 2>/dev/null || true
     fi
 }
 
@@ -157,6 +169,37 @@ case "$ACTION" in
             close_progress "$PID"
         done
         [ $TOTAL -gt 1 ] && notify "HammerIO" "Batch decompress: $DONE/$TOTAL succeeded" \
+            "$([ $ERRORS -eq 0 ] && echo 'emblem-default' || echo 'dialog-warning')"
+        ;;
+
+    decompress_to)
+        # Prompt user for destination folder
+        if command -v zenity &>/dev/null; then
+            DEST=$(zenity --file-selection --directory --title="HammerIO: Decompress to..." 2>/dev/null)
+        elif command -v kdialog &>/dev/null; then
+            DEST=$(kdialog --getexistingdirectory "$HOME" --title "HammerIO: Decompress to..." 2>/dev/null)
+        else
+            notify "HammerIO" "No file picker available (install zenity)" "dialog-error"
+            exit 1
+        fi
+        [ -z "$DEST" ] && exit 0
+
+        DONE=0; ERRORS=0
+        for FILE in "$@"; do
+            [ ! -e "$FILE" ] && continue
+            BASENAME="$(basename "$FILE")"
+            notify "HammerIO" "Decompressing: $BASENAME → $DEST" "utilities-file-archiver"
+            PID=$(show_progress "Decompressing $BASENAME to $DEST...")
+            if hammer decompress "$FILE" -o "$DEST" >> "$LOG" 2>&1; then
+                DONE=$((DONE + 1))
+                notify "HammerIO" "Decompressed: $BASENAME → $DEST" "emblem-default"
+            else
+                ERRORS=$((ERRORS + 1))
+                notify "HammerIO" "Failed: $BASENAME\nCheck $LOG" "dialog-error"
+            fi
+            close_progress "$PID"
+        done
+        [ $TOTAL -gt 1 ] && notify "HammerIO" "Batch decompress: $DONE/$TOTAL to $DEST" \
             "$([ $ERRORS -eq 0 ] && echo 'emblem-default' || echo 'dialog-warning')"
         ;;
 
@@ -333,6 +376,7 @@ def install(remove: bool = False) -> None:
         for name, action in [
             ("HammerIO: Compress (GPU)", "compress"),
             ("HammerIO: Decompress", "decompress"),
+            ("HammerIO: Decompress to...", "decompress_to"),
             ("HammerIO: Analyze Route", "analyze"),
         ]:
             script = _NAUTILUS_DIR / name
@@ -369,6 +413,15 @@ def install(remove: bool = False) -> None:
             f"Selection=s\n"
             f"Extensions=zst;lz4;hammer;gz;bz2\n"
         )
+        (_NEMO_DIR / "hammerio-decompress-to.nemo_action").write_text(
+            f"[Nemo Action]\n"
+            f"Name=HammerIO: Decompress to...\n"
+            f"Comment=Decompress to a chosen folder\n"
+            f"Exec={helper} decompress_to %F\n"
+            f"Icon-Name=utilities-file-archiver\n"
+            f"Selection=s\n"
+            f"Extensions=zst;lz4;hammer;gz;bz2\n"
+        )
 
         table.add_row("Nemo (Cinnamon)", "[green]Installed[/green]",
                        "Right-click > HammerIO")
@@ -378,34 +431,46 @@ def install(remove: bool = False) -> None:
     # ── Thunar ──
     if _has_cmd("thunar"):
         if _THUNAR_UCA.exists():
+            import re as _re
             uca = _THUNAR_UCA.read_text()
-            if "HammerIO" not in uca:
-                actions_xml = (
-                    f'<action>\n'
-                    f'    <icon>utilities-file-archiver</icon>\n'
-                    f'    <name>HammerIO: Compress (GPU)</name>\n'
-                    f'    <unique-id>hammerio-compress</unique-id>\n'
-                    f'    <command>{helper} compress %F</command>\n'
-                    f'    <description>Compress with GPU acceleration</description>\n'
-                    f'    <patterns>*</patterns>\n'
-                    f'    <directories/><audio-files/><image-files/><other-files/><text-files/><video-files/>\n'
-                    f'</action>\n'
-                    f'<action>\n'
-                    f'    <icon>utilities-file-archiver</icon>\n'
-                    f'    <name>HammerIO: Decompress</name>\n'
-                    f'    <unique-id>hammerio-decompress</unique-id>\n'
-                    f'    <command>{helper} decompress %F</command>\n'
-                    f'    <description>Decompress with HammerIO</description>\n'
-                    f'    <patterns>*.zst;*.lz4;*.hammer;*.gz;*.bz2</patterns>\n'
-                    f'    <other-files/>\n'
-                    f'</action>\n'
-                )
-                uca = uca.replace("</actions>", actions_xml + "</actions>")
-                _THUNAR_UCA.write_text(uca)
-                table.add_row("Thunar (XFCE)", "[green]Installed[/green]",
-                               "Right-click > HammerIO")
-            else:
-                table.add_row("Thunar (XFCE)", "[green]Already installed[/green]", "")
+            # Remove existing HammerIO actions before re-adding
+            uca = _re.sub(
+                r'<action>\s*<[^>]*>.*?hammerio.*?</action>\s*',
+                '', uca, flags=_re.DOTALL | _re.IGNORECASE,
+            )
+            actions_xml = (
+                f'<action>\n'
+                f'    <icon>application-x-hammerio</icon>\n'
+                f'    <name>HammerIO: Compress (GPU)</name>\n'
+                f'    <unique-id>hammerio-compress</unique-id>\n'
+                f'    <command>{helper} compress %F</command>\n'
+                f'    <description>Compress with GPU acceleration</description>\n'
+                f'    <patterns>*</patterns>\n'
+                f'    <directories/><audio-files/><image-files/><other-files/><text-files/><video-files/>\n'
+                f'</action>\n'
+                f'<action>\n'
+                f'    <icon>application-x-hammerio</icon>\n'
+                f'    <name>HammerIO: Decompress</name>\n'
+                f'    <unique-id>hammerio-decompress</unique-id>\n'
+                f'    <command>{helper} decompress %F</command>\n'
+                f'    <description>Decompress with HammerIO</description>\n'
+                f'    <patterns>*.zst;*.lz4;*.hammer;*.gz;*.bz2</patterns>\n'
+                f'    <other-files/>\n'
+                f'</action>\n'
+                f'<action>\n'
+                f'    <icon>application-x-hammerio</icon>\n'
+                f'    <name>HammerIO: Decompress to...</name>\n'
+                f'    <unique-id>hammerio-decompress-to</unique-id>\n'
+                f'    <command>{helper} decompress_to %F</command>\n'
+                f'    <description>Decompress to a chosen folder</description>\n'
+                f'    <patterns>*.zst;*.lz4;*.hammer;*.gz;*.bz2</patterns>\n'
+                f'    <other-files/>\n'
+                f'</action>\n'
+            )
+            uca = uca.replace("</actions>", actions_xml + "</actions>")
+            _THUNAR_UCA.write_text(uca)
+            table.add_row("Thunar (XFCE)", "[green]Installed[/green]",
+                           "Right-click > HammerIO")
         else:
             table.add_row("Thunar (XFCE)", "[yellow]No uca.xml[/yellow]", "Skipped")
     else:
@@ -468,14 +533,14 @@ def _uninstall() -> None:
     removed = 0
 
     # Nautilus scripts
-    for name in ["HammerIO: Compress (GPU)", "HammerIO: Decompress", "HammerIO: Analyze Route"]:
+    for name in ["HammerIO: Compress (GPU)", "HammerIO: Decompress", "HammerIO: Decompress to...", "HammerIO: Analyze Route"]:
         f = _NAUTILUS_DIR / name
         if f.exists():
             f.unlink()
             removed += 1
 
     # Nemo actions
-    for name in ["hammerio-compress.nemo_action", "hammerio-decompress.nemo_action"]:
+    for name in ["hammerio-compress.nemo_action", "hammerio-decompress.nemo_action", "hammerio-decompress-to.nemo_action"]:
         f = _NEMO_DIR / name
         if f.exists():
             f.unlink()

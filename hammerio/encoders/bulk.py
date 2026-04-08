@@ -56,9 +56,10 @@ def _compute_gpu_chunk_size(file_size: int, gpu_memory_mb: int = 0) -> int:
     if gpu_memory_mb > 0:
         # nvCOMP needs ~3x chunk_size at peak (input + output + internal scratch).
         # On Jetson unified memory, pinned host buffers also consume from the
-        # same pool.  Use at most 15% of total GPU memory per chunk to leave
-        # headroom for double-buffered pinned allocations and system use.
-        mem_limit = int(gpu_memory_mb * 0.15) * 1024 * 1024
+        # same pool.  Double-buffered pipeline allocates 2 pinned buffers +
+        # GPU scratch, so use at most 5% of total GPU memory per chunk to
+        # leave headroom for the OS, tar data in RAM, and other processes.
+        mem_limit = int(gpu_memory_mb * 0.05) * 1024 * 1024
     else:
         # Conservative default: 1 GB per chunk
         mem_limit = _1GB
@@ -246,7 +247,7 @@ class BulkEncoder:
     """
 
     # Maximum chunks before GPU overhead exceeds benefit — route to CPU
-    GPU_MAX_CHUNKS = 20
+    GPU_MAX_CHUNKS = 50
 
     def __init__(self, hardware: HardwareProfile) -> None:
         self.hardware = hardware
@@ -361,12 +362,27 @@ class BulkEncoder:
             fout.write(header)
 
             if use_gpu:
-                bytes_read = self._gpu_process_chunks(
-                    fin, fout, algorithm, original_size,
-                    progress_callback, job_id,
-                    chunk_size=active_chunk_size,
-                )
-            else:
+                try:
+                    bytes_read = self._gpu_process_chunks(
+                        fin, fout, algorithm, original_size,
+                        progress_callback, job_id,
+                        chunk_size=active_chunk_size,
+                    )
+                except (RuntimeError, MemoryError) as gpu_err:
+                    if "out of memory" in str(gpu_err).lower() or "CUDA" in str(gpu_err):
+                        logger.warning(
+                            "GPU out of memory at %d MB read — falling back to CPU for remainder",
+                            bytes_read // (1024 * 1024),
+                        )
+                        # Continue with CPU for the rest of the file
+                        use_gpu = False
+                        # bytes_read is updated by _gpu_process_chunks via
+                        # the return value, but on OOM it may not have returned.
+                        # The file position in fin is our source of truth.
+                        bytes_read = fin.tell() - HEADER_STRUCT.size
+                    else:
+                        raise
+            if not use_gpu:
                 while True:
                     chunk = fin.read(active_chunk_size)
                     if not chunk:
@@ -477,13 +493,32 @@ class BulkEncoder:
 
             bytes_written = 0
 
-            if self._use_gpu:
-                bytes_written = self._gpu_decompress_chunks(
-                    fin, fout, algorithm, original_size,
-                    progress_callback, job_id,
-                    format_version=version,
-                )
-            else:
+            # Try GPU decompression first, but fall back to CPU if the
+            # data wasn't compressed with nvCOMP (e.g. CPU zstd uses a
+            # different bitstream format).
+            use_gpu_decomp = self._use_gpu
+            if use_gpu_decomp:
+                try:
+                    bytes_written = self._gpu_decompress_chunks(
+                        fin, fout, algorithm, original_size,
+                        progress_callback, job_id,
+                        format_version=version,
+                    )
+                except Exception as gpu_err:
+                    err_msg = str(gpu_err).lower()
+                    if "nvcomp" in err_msg or "bitstream" in err_msg or "out of memory" in err_msg:
+                        logger.info(
+                            "GPU decompression failed (%s), retrying with CPU",
+                            gpu_err,
+                        )
+                        use_gpu_decomp = False
+                        # Rewind past the header to retry from the first chunk
+                        fin.seek(HEADER_STRUCT.size)
+                        fout.seek(0)
+                        fout.truncate()
+                    else:
+                        raise
+            if not use_gpu_decomp:
                 while True:
                     size_data = fin.read(chunk_struct.size)
                     if not size_data:
@@ -552,7 +587,22 @@ class BulkEncoder:
         filesystem (no cross-device moves).
         """
         prefix = f"[job={job_id}] " if job_id else ""
-        logger.info("%sPacking directory %s into tar before compression", prefix, input_path)
+
+        # Walk directory once to get total size for progress reporting
+        logger.info("%sScanning directory %s ...", prefix, input_path)
+        total_size = 0
+        file_count = 0
+        for root, _dirs, files in os.walk(input_path):
+            for f in files:
+                try:
+                    total_size += os.path.getsize(os.path.join(root, f))
+                    file_count += 1
+                except OSError:
+                    pass
+        logger.info(
+            "%sDirectory: %d files, %.1f MB",
+            prefix, file_count, total_size / (1024 * 1024),
+        )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fd, tar_tmp = tempfile.mkstemp(
@@ -560,14 +610,56 @@ class BulkEncoder:
         )
         os.close(fd)
         try:
+            # Tar with progress: add files individually so we can report
+            bytes_packed = 0
+            skipped = 0
+            logger.info("%sPacking %d files into tar ...", prefix, file_count)
             with tarfile.open(tar_tmp, "w") as tar:
-                tar.add(str(input_path), arcname=input_path.name)
+                for root, dirs, files in os.walk(input_path):
+                    # Add the directory entry itself
+                    rel = os.path.relpath(root, input_path.parent)
+                    try:
+                        tar.add(root, arcname=rel, recursive=False)
+                    except OSError:
+                        pass
+                    for f in files:
+                        fpath = os.path.join(root, f)
+                        arcname = os.path.join(rel, f)
+                        try:
+                            # Skip broken symlinks
+                            if os.path.islink(fpath) and not os.path.exists(fpath):
+                                skipped += 1
+                                continue
+                            fsize = os.path.getsize(fpath)
+                            tar.add(fpath, arcname=arcname, recursive=False)
+                            bytes_packed += fsize
+                            if progress_callback is not None and total_size > 0:
+                                # Tar phase = 0-50%, compression = 50-100%
+                                pct = (bytes_packed / total_size) * 50.0
+                                progress_callback(job_id or "", round(pct, 1))
+                        except OSError:
+                            skipped += 1
+            if skipped:
+                logger.info("%sSkipped %d broken symlinks/unreadable files", prefix, skipped)
+
+            logger.info(
+                "%sTar complete: %.1f MB, starting compression ...",
+                prefix, os.path.getsize(tar_tmp) / (1024 * 1024),
+            )
+
+            # Wrap the original callback to map compression 0-100% to 50-100%
+            original_cb = progress_callback
+            def _compression_cb(jid: str, pct: float) -> None:
+                if original_cb is not None:
+                    mapped = 50.0 + (pct / 100.0) * 50.0
+                    original_cb(jid, round(mapped, 1))
+
             return self.process(
                 input_path=tar_tmp,
                 output_path=output_path,
                 algorithm=algorithm,
                 quality=quality,
-                progress_callback=progress_callback,
+                progress_callback=_compression_cb,
                 job_id=job_id,
             )
         finally:
