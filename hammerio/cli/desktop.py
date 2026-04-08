@@ -25,13 +25,16 @@ from rich.table import Table
 
 console = Console()
 
-# Where we place the action helper script
+# Where we place the action helper script and assets
 _DATA_DIR = Path.home() / ".local" / "share" / "hammerio"
 _HELPER = _DATA_DIR / "hammerio-action.sh"
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 _NAUTILUS_DIR = Path.home() / ".local" / "share" / "nautilus" / "scripts"
 _NEMO_DIR = Path.home() / ".local" / "share" / "nemo" / "actions"
 _APPS_DIR = Path.home() / ".local" / "share" / "applications"
+_MIME_DIR = Path.home() / ".local" / "share" / "mime"
+_ICONS_DIR = Path.home() / ".local" / "share" / "icons" / "hicolor"
 _THUNAR_UCA = Path.home() / ".config" / "Thunar" / "uca.xml"
 
 # ── Helper script (bash) ────────────────────────────────────────────────
@@ -193,6 +196,105 @@ def _has_cmd(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def _install_mime_and_icon() -> None:
+    """Register the application/x-hammerio MIME type and .hammer file icon."""
+    mime_src = _ASSETS_DIR / "hammerio-mime.xml"
+    icon_src = _ASSETS_DIR / "hammer-icon.svg"
+
+    if not mime_src.exists() or not icon_src.exists():
+        console.print("[yellow]Warning: MIME/icon assets not found — skipping icon registration[/yellow]")
+        return
+
+    # Install MIME type via xdg-mime
+    try:
+        subprocess.run(
+            ["xdg-mime", "install", "--novendor", str(mime_src)],
+            capture_output=True, timeout=10,
+        )
+        console.print("  MIME type: [green]application/x-hammerio registered[/green]")
+    except FileNotFoundError:
+        console.print("  [yellow]xdg-mime not found — MIME type not registered[/yellow]")
+
+    # Install icon at multiple sizes via xdg-icon-resource
+    for size in (48, 64, 128, 256):
+        try:
+            subprocess.run(
+                [
+                    "xdg-icon-resource", "install", "--novendor",
+                    "--context", "mimetypes",
+                    "--size", str(size),
+                    str(icon_src), "application-x-hammerio",
+                ],
+                capture_output=True, timeout=10,
+            )
+        except FileNotFoundError:
+            break
+
+    # Also copy the SVG directly for scalable icon support
+    scalable_dir = _ICONS_DIR / "scalable" / "mimetypes"
+    scalable_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(icon_src), str(scalable_dir / "application-x-hammerio.svg"))
+
+    # Update icon cache
+    try:
+        subprocess.run(
+            ["gtk-update-icon-cache", "-f", "-t", str(_ICONS_DIR.parent)],
+            capture_output=True, timeout=30,
+        )
+    except FileNotFoundError:
+        pass
+
+    # Update MIME database
+    try:
+        subprocess.run(
+            ["update-mime-database", str(_MIME_DIR)],
+            capture_output=True, timeout=30,
+        )
+    except FileNotFoundError:
+        pass
+
+    console.print("  File icon: [green].hammer files now have the HammerIO icon[/green]")
+
+
+def _uninstall_mime_and_icon() -> None:
+    """Remove MIME type and icon registrations."""
+    mime_src = _ASSETS_DIR / "hammerio-mime.xml"
+    try:
+        subprocess.run(
+            ["xdg-mime", "uninstall", str(mime_src)],
+            capture_output=True, timeout=10,
+        )
+    except (FileNotFoundError, Exception):
+        pass
+
+    for size in (48, 64, 128, 256):
+        try:
+            subprocess.run(
+                [
+                    "xdg-icon-resource", "uninstall",
+                    "--context", "mimetypes",
+                    "--size", str(size),
+                    "application-x-hammerio",
+                ],
+                capture_output=True, timeout=10,
+            )
+        except (FileNotFoundError, Exception):
+            pass
+
+    scalable = _ICONS_DIR / "scalable" / "mimetypes" / "application-x-hammerio.svg"
+    if scalable.exists():
+        scalable.unlink()
+
+    try:
+        subprocess.run(["update-mime-database", str(_MIME_DIR)], capture_output=True, timeout=30)
+    except (FileNotFoundError, Exception):
+        pass
+    try:
+        subprocess.run(["gtk-update-icon-cache", "-f", "-t", str(_ICONS_DIR.parent)], capture_output=True, timeout=30)
+    except (FileNotFoundError, Exception):
+        pass
+
+
 def install(remove: bool = False) -> None:
     """Install or remove desktop right-click integration."""
 
@@ -215,6 +317,9 @@ def install(remove: bool = False) -> None:
 
     helper = _write_helper()
     console.print(f"  Action script: [dim]{helper}[/dim]")
+
+    # ── MIME type & icon ──
+    _install_mime_and_icon()
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("File Manager")
@@ -328,10 +433,10 @@ def install(remove: bool = False) -> None:
         f"Name=Decompress with HammerIO\n"
         f"Comment=Decompress files with HammerIO\n"
         f"Exec={helper} decompress %F\n"
-        f"Icon=utilities-file-archiver\n"
+        f"Icon=application-x-hammerio\n"
         f"Terminal=false\n"
         f"Categories=Utility;Archiving;\n"
-        f"MimeType=application/zstd;application/gzip;"
+        f"MimeType=application/x-hammerio;application/zstd;application/gzip;"
         f"application/x-bzip2;application/x-lz4;\n"
         f"NoDisplay=true\n"
     )
@@ -359,6 +464,7 @@ def _uninstall() -> None:
     """Remove all desktop integration files."""
     console.print("[bold]Removing HammerIO desktop integration...[/bold]\n")
 
+    _uninstall_mime_and_icon()
     removed = 0
 
     # Nautilus scripts

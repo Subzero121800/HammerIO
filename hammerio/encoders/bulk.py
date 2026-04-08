@@ -392,7 +392,7 @@ class BulkEncoder:
     def decompress(
         self,
         input_path: Union[str, Path],
-        output_path: Union[str, Path],
+        output_path: Union[str, Path, None] = None,
         progress_callback: Optional[Callable[[str, float], None]] = None,
         job_id: Optional[str] = None,
     ) -> str:
@@ -401,6 +401,8 @@ class BulkEncoder:
         Args:
             input_path: Path to the ``.hmio`` container.
             output_path: Destination path for the decompressed data.
+                If ``None``, strips the ``.hammer`` suffix (or appends
+                ``.decompressed``).
             progress_callback: Optional callable receiving a float in
                 [0.0, 1.0] representing completion progress.
             job_id: Optional job identifier for logging context.
@@ -413,17 +415,38 @@ class BulkEncoder:
             FileNotFoundError: If *input_path* does not exist.
         """
         input_path = Path(input_path)
+
+        if output_path is not None:
+            output_path = Path(output_path)
+            # If output is an existing directory, place output inside it
+            if output_path.is_dir():
+                stem = input_path.stem  # e.g. "Act45CompliancePortal" from .hammer
+                output_path = output_path / stem
+        else:
+            # Strip .hammer suffix to recover original name
+            if input_path.suffix.lower() == ".hammer":
+                output_path = input_path.with_suffix("")
+            else:
+                output_path = input_path.with_suffix(input_path.suffix + ".decompressed")
         output_path = Path(output_path)
 
         if not input_path.is_file():
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
+        # Always decompress to a temp file first.  After decompression we
+        # check whether the result is a tar (directory archive) and either
+        # extract it or move the temp file to the final output_path.
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, _tmp_path = tempfile.mkstemp(
+            suffix=".tmp", dir=str(output_path.parent),
+        )
+        os.close(fd)
+        write_path = Path(_tmp_path)
+
         prefix = f"[job={job_id}] " if job_id else ""
         compressed_size = input_path.stat().st_size
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(input_path, "rb") as fin, open(output_path, "wb") as fout:
+        with open(input_path, "rb") as fin, open(write_path, "wb") as fout:
             # Read header
             header_data = fin.read(HEADER_STRUCT.size)
             if len(header_data) < HEADER_STRUCT.size:
@@ -484,6 +507,29 @@ class BulkEncoder:
         logger.info(
             "%sDecompression complete: %d bytes restored.", prefix, bytes_written,
         )
+
+        # If the result is a tar archive (directory was compressed),
+        # extract it and remove the temp file.
+        try:
+            if tarfile.is_tarfile(str(write_path)):
+                extract_dir = output_path.parent
+                logger.info("%sExtracting tar archive to %s", prefix, extract_dir)
+                extract_dir.mkdir(parents=True, exist_ok=True)
+                with tarfile.open(write_path, "r") as tar:
+                    top = tar.getnames()[0].split("/")[0] if tar.getnames() else None
+                    tar.extractall(path=str(extract_dir))
+                os.unlink(write_path)
+                if top:
+                    return str(extract_dir / top)
+                return str(extract_dir)
+        except Exception:
+            # Not a valid tar — treat as a plain decompressed file
+            pass
+
+        # Plain file: move temp file to final output location
+        if output_path.exists():
+            output_path.unlink()
+        write_path.replace(output_path)
         return str(output_path)
 
     # ------------------------------------------------------------------
