@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hammerio"
-version = "1.0.2"
+version = "1.0.5"
 description = "GPU-accelerated compression for edge AI. GPU where it matters. CPU where it doesn't."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -61,6 +61,9 @@ hammer = "hammerio.cli.main:app"
 
 [tool.setuptools.packages.find]
 include = ["hammerio*"]
+
+[tool.setuptools.package-data]
+hammerio = ["assets/*.svg", "assets/*.xml"]
 
 [tool.black]
 line-length = 100
