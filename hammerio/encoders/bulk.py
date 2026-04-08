@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import os
 import struct
+import tarfile
+import tempfile
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -305,8 +307,15 @@ class BulkEncoder:
                 f"Choose from: {', '.join(SUPPORTED_ALGORITHMS)}"
             )
 
-        if not input_path.is_file():
-            raise FileNotFoundError(f"Input file not found: {input_path}")
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input not found: {input_path}")
+
+        # Directory: create a temporary tar archive, compress it, clean up
+        if input_path.is_dir():
+            return self._process_directory(
+                input_path, output_path, algorithm, quality,
+                progress_callback, job_id,
+            )
 
         original_size = input_path.stat().st_size
         prefix = f"[job={job_id}] " if job_id else ""
@@ -476,6 +485,50 @@ class BulkEncoder:
             "%sDecompression complete: %d bytes restored.", prefix, bytes_written,
         )
         return str(output_path)
+
+    # ------------------------------------------------------------------
+    # Directory support
+    # ------------------------------------------------------------------
+
+    def _process_directory(
+        self,
+        input_path: Path,
+        output_path: Path,
+        algorithm: str,
+        quality: Union[int, str],
+        progress_callback: Optional[Callable[[str, float], None]],
+        job_id: Optional[str],
+    ) -> str:
+        """Tar a directory, then compress the tar with :meth:`process`.
+
+        The intermediate tar is written to a temporary file in the same
+        parent directory as *output_path* so it stays on the same
+        filesystem (no cross-device moves).
+        """
+        prefix = f"[job={job_id}] " if job_id else ""
+        logger.info("%sPacking directory %s into tar before compression", prefix, input_path)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tar_tmp = tempfile.mkstemp(
+            suffix=".tar", dir=str(output_path.parent),
+        )
+        os.close(fd)
+        try:
+            with tarfile.open(tar_tmp, "w") as tar:
+                tar.add(str(input_path), arcname=input_path.name)
+            return self.process(
+                input_path=tar_tmp,
+                output_path=output_path,
+                algorithm=algorithm,
+                quality=quality,
+                progress_callback=progress_callback,
+                job_id=job_id,
+            )
+        finally:
+            try:
+                os.unlink(tar_tmp)
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     # Pipelined GPU helpers

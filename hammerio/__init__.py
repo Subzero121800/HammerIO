@@ -4,7 +4,7 @@ Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
 Licensed under the Apache License, Version 2.0
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __author__ = "Joseph C McGinty Jr"
 __copyright__ = "Copyright 2026 ResilientMind AI"
 __license__ = "Apache-2.0"

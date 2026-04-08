@@ -157,7 +157,8 @@ class TestWebDashboard:
         assert r.status_code == 200
         data = r.get_json()
         assert data["status"] == "ok"
-        assert data["version"] == "1.0.0"
+        from hammerio import __version__
+        assert data["version"] == __version__
         assert "uptime" in data
         assert isinstance(data["uptime"], float)
         assert data["uptime"] >= 0
