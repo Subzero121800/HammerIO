@@ -23,13 +23,15 @@ Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
 
 By using HammerIO you agree to the following terms:
 
-OPEN SOURCE LICENSE (Apache 2.0)
-  HammerIO is licensed under the Apache License, Version 2.0.
-  You may use, modify, and distribute HammerIO freely for:
-    - Personal, educational, and research use
-    - Open source projects
-    - Internal business tools (non-commercial distribution)
-    - Evaluation and testing
+PROPRIETARY LICENSE
+  HammerIO is proprietary software. All rights reserved.
+  You may use HammerIO solely for personal, non-commercial evaluation.
+
+  You may NOT without prior written permission:
+    - Copy, reproduce, or distribute the Software
+    - Use the Software for any commercial purpose
+    - Modify, reverse engineer, or create derivative works
+    - Redistribute or make the Software available to third parties
 
 COMMERCIAL USE
   A commercial license is required if you:
@@ -42,15 +44,8 @@ COMMERCIAL USE
   Details: https://hammerio.dev/license
 
 DISCLAIMER
-  Licensed under the Apache License, Version 2.0 (the "License");
-  you may not use this software except in compliance with the License.
-  You may obtain a copy of the License at:
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing, software
-  distributed under the License is distributed on an "AS IS" BASIS,
-  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND.
+  See the LICENSE file for the full terms and conditions.
 
 Full license text: https://github.com/Subzero121800/HammerIO/blob/main/LICENSE
 """
@@ -67,7 +62,7 @@ def record_acceptance() -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
     _ACCEPTANCE_FILE.write_text(
         f"License accepted: {timestamp}\n"
-        f"HammerIO — Apache 2.0\n"
+        f"HammerIO — Proprietary License\n"
         f"Copyright 2026 ResilientMind AI | Joseph C McGinty Jr\n"
     )
 

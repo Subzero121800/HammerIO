@@ -185,7 +185,7 @@ def generate_architecture_svg(output_path: str | Path = "docs/architecture.svg")
   <line x1="705" y1="400" x2="705" y2="440" class="ar"/>
 
   <!-- Footer -->
-  <text x="412" y="520" class="t2" text-anchor="middle">Copyright 2026 ResilientMind AI | Joseph C McGinty Jr | Apache 2.0</text>
+  <text x="412" y="520" class="t2" text-anchor="middle">Copyright 2026 ResilientMind AI | Joseph C McGinty Jr | All Rights Reserved</text>
   <text x="412" y="540" class="t2" text-anchor="middle">GPU where it matters. CPU where it doesn't. Zero configuration.</text>
 </svg>"""
 

@@ -1,7 +1,7 @@
 """HammerIO Web Dashboard — Flask-based monitoring and control.
 
 Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
-Licensed under the Apache License, Version 2.0
+Proprietary License — All Rights Reserved
 """
 
 from __future__ import annotations
@@ -1245,7 +1245,7 @@ DASHBOARD_HTML = """
 
     <div class="footer">
         Copyright &copy; 2026 <a href="https://resilientmindai.com">ResilientMind AI</a> | Joseph C McGinty Jr<br>
-        HammerIO is open source under the Apache License 2.0
+        HammerIO is proprietary software. All rights reserved
     </div>
 
     <script>
@@ -2407,7 +2407,7 @@ Enter = Run | Shift+Enter = New line | Up/Down = History | Tab = Autocomplete
     </div>
 
     <div class="footer">
-        Copyright &copy; 2026 <a href="https://resilientmindai.com">ResilientMind AI</a> | Joseph C McGinty Jr | Apache 2.0
+        Copyright &copy; 2026 <a href="https://resilientmindai.com">ResilientMind AI</a> | Joseph C McGinty Jr | All Rights Reserved
     </div>
 
     <script>

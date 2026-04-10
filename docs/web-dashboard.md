@@ -110,7 +110,7 @@ Health check endpoint.
 Version and environment information.
 
 ```json
-{"version": "0.1.0", "name": "hammerio", "author": "Joseph C McGinty Jr", "license": "Apache-2.0", "python": "3.10.12", "platform": "Linux-5.15.x-aarch64"}
+{"version": "0.1.0", "name": "hammerio", "author": "Joseph C McGinty Jr", "license": "Proprietary", "python": "3.10.12", "platform": "Linux-5.15.x-aarch64"}
 ```
 
 ### GET /api/hardware

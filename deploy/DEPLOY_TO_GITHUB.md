@@ -27,7 +27,7 @@ gh repo create Subzero121800/HammerIO \
     --public \
     --description "GPU where it matters. CPU where it doesn't. Zero configuration. CUDA-accelerated compression & media processing for NVIDIA Jetson." \
     --homepage "https://resilientmindai.com" \
-    --license Apache-2.0 \
+    \
     --source . \
     --remote origin
 ```
@@ -36,7 +36,7 @@ Or if you prefer to create the repo first on GitHub.com:
 1. Go to https://github.com/new
 2. Name: `hammerio`
 3. Description: `GPU where it matters. CPU where it doesn't. Zero configuration.`
-4. Public, no README (we have one), Apache 2.0 license
+4. Public, no README (we have one), no license template (we have our own)
 5. Then add the remote:
 
 ```bash

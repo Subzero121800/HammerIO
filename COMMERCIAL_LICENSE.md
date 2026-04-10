@@ -1,15 +1,10 @@
 # HammerIO Commercial License
 
-## Open Source License
+## Proprietary License
 
-HammerIO is available under the **Apache License, Version 2.0** for:
-- Personal use
-- Educational and research use
-- Open source projects
-- Internal business tools (non-commercial distribution)
-- Evaluation and testing
+HammerIO is proprietary software. All rights reserved. The Software is provided for personal, non-commercial evaluation only. Any other use requires a commercial license.
 
-The full Apache 2.0 license is in the [LICENSE](LICENSE) file.
+The full license terms are in the [LICENSE](LICENSE) file.
 
 ## Commercial License
 
@@ -30,7 +25,7 @@ A commercial license is required if you:
 ### What's Included
 
 All commercial licenses include:
-- Full source code access (same codebase as open source)
+- Full source code access
 - Commercial redistribution rights
 - Priority bug fixes
 - License compliance audit protection
@@ -45,16 +40,13 @@ Or visit: [resilientmindai.com/hammerio/licensing](https://resilientmindai.com/h
 ### FAQ
 
 **Q: Can I use HammerIO for free in my company?**
-A: Yes — if you're using it as an internal tool and not redistributing it as part of a product.
-
-**Q: Do I need a license for my open source project?**
-A: No. Apache 2.0 covers all open source use.
+A: Only for internal evaluation purposes. Any production or commercial use requires a commercial license.
 
 **Q: What about edge/IoT deployments?**
-A: Internal fleet deployments are covered by Apache 2.0. If you're selling the device with HammerIO pre-installed, you need an OEM license.
+A: All deployments beyond personal evaluation require a commercial license, including internal fleet deployments.
 
 **Q: Can I try before buying?**
-A: Yes. HammerIO is fully functional under Apache 2.0. The commercial license adds redistribution rights and support.
+A: Yes. The evaluation license allows personal, non-commercial testing. The commercial license is required for production use.
 
 ---
 

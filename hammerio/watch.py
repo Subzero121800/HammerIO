@@ -4,7 +4,7 @@ Monitors ``compress/`` and ``decompress/`` folders for new files and
 automatically processes them using the optimal GPU/CPU encoder.
 
 Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
-Licensed under the Apache License, Version 2.0
+Proprietary License — All Rights Reserved
 """
 
 from __future__ import annotations

@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TOML configuration** — persistent config with `hammer config --save`
 - **Benchmark suite** — reproducible GPU vs CPU testing with real video files
 - **325 tests** passing with comprehensive coverage
-- **Apache 2.0** open source license with commercial licensing option
+- **Proprietary** license with commercial licensing option
 - Docker images for Jetson (L4T) and x86 (CUDA)
 - GitHub Actions CI/CD
 - Pre-commit hooks (black, ruff, mypy)

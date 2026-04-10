@@ -81,7 +81,7 @@ Use GitHub Issues with the provided templates:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+By contributing, you agree that your contributions will be licensed under the same proprietary license as the project, and you assign all rights to ResilientMind AI.
 
 ---
 

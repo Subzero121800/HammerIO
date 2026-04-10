@@ -7,7 +7,7 @@ Memory usage: constant at chunk_size regardless
 of input size.
 
 Copyright 2026 ResilientMind AI | Joseph C McGinty Jr
-Licensed under the Apache License, Version 2.0
+Proprietary License — All Rights Reserved
 """
 
 from __future__ import annotations

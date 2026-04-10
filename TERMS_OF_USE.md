@@ -12,24 +12,25 @@ By downloading, installing, or using HammerIO ("the Software"), you agree to be 
 
 ## 2. License Grant
 
-HammerIO is licensed under the Apache License, Version 2.0. Subject to the terms of that license, you are granted a worldwide, royalty-free, non-exclusive license to use, reproduce, modify, and distribute the Software.
+HammerIO is proprietary software. All rights reserved. Subject to the terms of this License, you are granted a limited, non-exclusive, non-transferable, revocable license to use the Software solely for personal, non-commercial evaluation purposes.
 
-## 3. Permitted Use
+## 3. Restrictions
 
-You may use HammerIO for:
-- Personal, educational, and research purposes
-- Commercial applications, including integration into proprietary products
-- Deployment on any NVIDIA CUDA-capable hardware
-- Edge computing, sovereign compute, and disconnected environments
-- Building derivative works, provided attribution is maintained
+You may NOT, without prior written permission from the Licensor:
 
-## 4. Restrictions
-
-You may NOT:
+- Copy, reproduce, or distribute the Software or any portion thereof
+- Use the Software for any commercial purpose
+- Modify, adapt, reverse engineer, decompile, or create derivative works
 - Remove or alter copyright notices, attribution, or license headers
+- Redistribute, publish, or make the Software available to any third party
 - Use the HammerIO name, logo, or branding to imply endorsement without permission
-- Distribute modified versions under the same name without clear differentiation
 - Use the Software for any purpose that violates applicable law
+
+## 4. Commercial Licensing
+
+Commercial use requires a separate commercial license. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
+
+Contact: Joseph@ResilientMindAI.com
 
 ## 5. Hardware Compatibility
 
@@ -39,7 +40,7 @@ HammerIO is designed for NVIDIA GPU hardware with CUDA support. While primarily 
 
 ## 6. No Warranty
 
-THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. SEE THE APACHE LICENSE 2.0 FOR FULL WARRANTY DISCLAIMER.
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
 
 ## 7. Limitation of Liability
 
@@ -61,7 +62,7 @@ ResilientMind AI reserves the right to modify these Terms of Use. Changes will b
 
 For questions about these Terms of Use:
 - Website: [resilientmindai.com](https://resilientmindai.com)
-- GitHub: [github.com/hammerio/hammerio](https://github.com/hammerio/hammerio)
+- GitHub: [github.com/Subzero121800/HammerIO](https://github.com/Subzero121800/HammerIO)
 
 ---
 
