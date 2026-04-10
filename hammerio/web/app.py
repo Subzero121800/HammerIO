@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import platform
+import secrets
+import shlex
 import shutil
 import socket
 import time
@@ -70,9 +72,13 @@ _app_start_time: float = time.time()
 def create_app() -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = "hammerio-dashboard-key"
+    app.config["SECRET_KEY"] = os.environ.get(
+        "HAMMERIO_SECRET_KEY", secrets.token_hex(32)
+    )
 
-    socketio.init_app(app, cors_allowed_origins="*", async_mode="threading")
+    _allowed_origins = os.environ.get("HAMMERIO_CORS_ORIGINS", "").strip()
+    _cors = _allowed_origins.split(",") if _allowed_origins else ["http://localhost:*", "http://127.0.0.1:*"]
+    socketio.init_app(app, cors_allowed_origins=_cors, async_mode="threading")
 
     # Load persisted job history
     _load_job_history()
@@ -184,10 +190,17 @@ def _register_routes(app: Flask) -> None:
         return jsonify({"error": "Internal server error", "detail": str(e)}), 500
 
     @app.after_request
-    def add_cors_headers(response: Any) -> Any:
-        response.headers["Access-Control-Allow-Origin"] = "*"
+    def add_security_headers(response: Any) -> Any:
+        origin = request.headers.get("Origin", "")
+        if origin and any(
+            origin == o or (o.endswith(":*") and origin.startswith(o[:-1]))
+            for o in _cors
+        ):
+            response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
         return response
 
     @app.route("/")
@@ -481,10 +494,12 @@ def _register_routes(app: Flask) -> None:
     def api_console() -> Any:
         """Execute a HammerIO CLI command and return output.
 
-        Only allows 'hammer' / 'python3 -m hammerio' commands for safety.
+        Only allows 'hammer' / 'python3 -m hammerio' commands and a
+        strict allowlist of read-only system commands. Commands are
+        executed without shell=True to prevent injection.
         """
+        import re as _re
         import subprocess as _sp
-        import shlex
 
         data = request.json or {}
         raw_cmd = data.get("command", "").strip()
@@ -492,29 +507,46 @@ def _register_routes(app: Flask) -> None:
         if not raw_cmd:
             return jsonify({"error": "No command provided"}), 400
 
-        # Security: only allow hammer commands and a few safe system commands
-        allowed_prefixes = (
-            "hammer ", "hammer\n",
-            "python3 -m hammerio",
-            "python -m hammerio",
-            "ls ", "pwd", "cat ", "head ", "tail ", "wc ",
-            "df ", "free", "uname", "uptime", "nvidia-smi",
-            "nvpmodel", "tegrastats", "jtop", "gst-inspect",
-        )
-        # Allow bare "hammer" with no args
-        if raw_cmd == "hammer":
-            raw_cmd = "hammer --help"
+        # Reject shell metacharacters outright
+        if any(c in raw_cmd for c in ";|&`$(){}!<>\n\\"):
+            return jsonify({"error": "Shell metacharacters are not allowed"}), 403
 
-        if not any(raw_cmd.startswith(p) for p in allowed_prefixes):
+        try:
+            args = shlex.split(raw_cmd)
+        except ValueError as e:
+            return jsonify({"error": f"Invalid command syntax: {e}"}), 400
+
+        if not args:
+            return jsonify({"error": "No command provided"}), 400
+
+        # Strict allowlist: only these exact executables may run
+        allowed_executables = {
+            "hammer", "pwd", "ls", "cat", "head", "tail", "wc",
+            "df", "free", "uname", "uptime", "nvidia-smi",
+            "nvpmodel", "tegrastats", "jtop", "gst-inspect-1.0",
+        }
+        # Also allow "python3 -m hammerio" / "python -m hammerio"
+        is_python_hammerio = (
+            args[0] in ("python3", "python")
+            and len(args) >= 3
+            and args[1] == "-m"
+            and args[2] == "hammerio"
+        )
+
+        if args[0] not in allowed_executables and not is_python_hammerio:
             return jsonify({
-                "error": f"Command not allowed. Use 'hammer <command>' or allowed system commands.",
-                "allowed": ["hammer *", "ls", "pwd", "df", "free", "nvidia-smi", "nvpmodel"],
+                "error": "Command not allowed. Use 'hammer <command>' or allowed system commands.",
+                "allowed": sorted(allowed_executables),
             }), 403
+
+        # Bare "hammer" with no subcommand
+        if args == ["hammer"]:
+            args = ["hammer", "--help"]
 
         try:
             result = _sp.run(
-                raw_cmd,
-                shell=True,
+                args,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -522,7 +554,6 @@ def _register_routes(app: Flask) -> None:
                 env={**os.environ, "COLUMNS": "120", "TERM": "dumb", "NO_COLOR": "1"},
             )
             # Strip ANSI escape codes for clean display
-            import re as _re
             ansi_escape = _re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
             stdout = ansi_escape.sub('', result.stdout)
             stderr = ansi_escape.sub('', result.stderr)
@@ -564,7 +595,10 @@ def _register_routes(app: Flask) -> None:
         try:
             for item in sorted(target_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
                 try:
-                    stat = item.stat()
+                    # Skip symlinks to prevent traversal
+                    if item.is_symlink():
+                        continue
+                    stat = item.stat(follow_symlinks=False)
                     entries.append({
                         "name": item.name,
                         "size": stat.st_size if item.is_file() else 0,
@@ -1407,7 +1441,7 @@ DASHBOARD_HTML = """
                     data.files.forEach(f => {
                         const color = f.status === 'done' ? 'var(--accent-green)' : f.status === 'active' ? 'var(--accent-blue)' : 'var(--text-secondary)';
                         const name = f.name ? f.name.split('/').pop() : '?';
-                        html += '<div class="metric"><span class="label">' + name + '</span><span class="value" style="color:' + color + '">' + (f.pct || 0) + '%</span></div>';
+                        html += '<div class="metric"><span class="label">' + esc(name) + '</span><span class="value" style="color:' + color + '">' + (f.pct || 0) + '%</span></div>';
                     });
                     fl.innerHTML = html;
                 }
@@ -1505,6 +1539,12 @@ DASHBOARD_HTML = """
             return (bytes / 1073741824).toFixed(2) + ' GB';
         }
 
+        function esc(s) {
+            const d = document.createElement('div');
+            d.appendChild(document.createTextNode(s));
+            return d.innerHTML;
+        }
+
         // ─── File Browser Modal ──────────────────────────────────────────
         let browserTargetInput = '';
         let currentBrowserPath = '';
@@ -1555,16 +1595,16 @@ DASHBOARD_HTML = """
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
-                    resultDiv.innerHTML = '<span style="color:#f85149">' + data.error + '</span>';
+                    resultDiv.innerHTML = '<span style="color:#f85149">' + esc(data.error) + '</span>';
                 } else {
                     resultDiv.innerHTML = '<span style="color:#3fb950">Done!</span> ' +
                         formatBytes(data.input_size) + ' \\u2192 ' + formatBytes(data.output_size) +
                         ' in ' + data.elapsed_s.toFixed(2) + 's<br>' +
-                        '<span style="color:var(--text-secondary);font-size:11px">Output: ' + data.output_path + '</span>';
+                        '<span style="color:var(--text-secondary);font-size:11px">Output: ' + esc(data.output_path) + '</span>';
                     addJobRow({...data, processor: 'decompress', ratio: 0, throughput_mbps: 0, algorithm: 'decompress'});
                 }
             })
-            .catch(e => { resultDiv.innerHTML = '<span style="color:#f85149">' + e + '</span>'; });
+            .catch(e => { resultDiv.innerHTML = '<span style="color:#f85149">' + esc(String(e)) + '</span>'; });
         }
 
         function analyzeRoute() {
@@ -1580,12 +1620,12 @@ DASHBOARD_HTML = """
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
-                    resultDiv.innerHTML = `<span style="color:#f85149">${data.error}</span>`;
+                    resultDiv.innerHTML = `<span style="color:#f85149">${esc(data.error)}</span>`;
                 } else {
-                    resultDiv.innerHTML = `<pre style="color:var(--accent-cyan);white-space:pre-wrap;font-size:12px;margin:0">${data.explanation}</pre>`;
+                    resultDiv.innerHTML = `<pre style="color:var(--accent-cyan);white-space:pre-wrap;font-size:12px;margin:0">${esc(data.explanation)}</pre>`;
                 }
             })
-            .catch(e => { resultDiv.innerHTML = `<span style="color:#f85149">${e}</span>`; });
+            .catch(e => { resultDiv.innerHTML = `<span style="color:#f85149">${esc(String(e))}</span>`; });
         }
 
         function submitCompress() {
@@ -1606,27 +1646,27 @@ DASHBOARD_HTML = """
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
-                    resultDiv.innerHTML = `<span style="color:#f85149">${data.error}</span>`;
+                    resultDiv.innerHTML = `<span style="color:#f85149">${esc(data.error)}</span>`;
                 } else {
-                    resultDiv.innerHTML = `<span style="color:#3fb950">Done!</span> ${formatBytes(data.input_size)} → ${formatBytes(data.output_size)} (${data.ratio.toFixed(2)}x) in ${data.elapsed_s.toFixed(2)}s via <b>${data.processor}</b>` +
-                        (data.reason ? `<br><span style="color:var(--text-secondary);font-size:11px">${data.reason}</span>` : '');
+                    resultDiv.innerHTML = `<span style="color:#3fb950">Done!</span> ${formatBytes(data.input_size)} → ${formatBytes(data.output_size)} (${data.ratio.toFixed(2)}x) in ${data.elapsed_s.toFixed(2)}s via <b>${esc(data.processor)}</b>` +
+                        (data.reason ? `<br><span style="color:var(--text-secondary);font-size:11px">${esc(data.reason)}</span>` : '');
                     addJobRow(data);
                 }
             })
-            .catch(e => { resultDiv.innerHTML = `<span style="color:#f85149">${e}</span>`; });
+            .catch(e => { resultDiv.innerHTML = `<span style="color:#f85149">${esc(String(e))}</span>`; });
         }
 
         function makeJobRow(data) {
             const filename = data.input_path ? data.input_path.split('/').pop() : '?';
             return '<tr>' +
-                '<td>' + filename + '</td>' +
+                '<td>' + esc(filename) + '</td>' +
                 '<td>' + formatBytes(data.input_size || 0) + '</td>' +
                 '<td>' + formatBytes(data.output_size || 0) + '</td>' +
                 '<td>' + (data.ratio ? data.ratio.toFixed(2) + 'x' : '-') + '</td>' +
                 '<td>' + (data.elapsed_s ? data.elapsed_s.toFixed(2) + 's' : '-') + '</td>' +
                 '<td>' + (data.throughput_mbps ? data.throughput_mbps.toFixed(1) + ' MB/s' : '-') + '</td>' +
-                '<td style="color:#3fb950">' + (data.processor || '-') + '</td>' +
-                '<td>' + (data.status || '-') + '</td>' +
+                '<td style="color:#3fb950">' + esc(data.processor || '-') + '</td>' +
+                '<td>' + esc(data.status || '-') + '</td>' +
                 '</tr>';
         }
 

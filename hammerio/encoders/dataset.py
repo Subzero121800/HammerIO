@@ -660,7 +660,7 @@ class StreamingDataset(_get_iterable_dataset_base()):  # type: ignore[misc]
 
         # Reassemble all chunks into a single buffer for torch.load
         buf = io.BytesIO(b"".join(self._iter_chunks()))
-        obj = torch.load(buf, weights_only=False)
+        obj = torch.load(buf, weights_only=True)
         if isinstance(obj, (list, tuple)):
             yield from obj
         else:
