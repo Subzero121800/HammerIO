@@ -84,3 +84,4 @@ test.md
 setup_venv.sh
 start.sh
 start_webui.py
+publish_wizard.py
