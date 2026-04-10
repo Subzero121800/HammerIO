@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/architecture.svg" alt="HammerIO Architecture" width="800">
+  <img src="https://raw.githubusercontent.com/Subzero121800/HammerIO/main/docs/architecture.svg" alt="HammerIO Architecture" width="800">
 </p>
 
 <h1 align="center">HammerIO</h1>
