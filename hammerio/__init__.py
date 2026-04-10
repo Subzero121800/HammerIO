@@ -1,13 +1,13 @@
 """HammerIO — GPU where it matters. CPU where it doesn't. Zero configuration.
 
 Copyright 2026 ResilientMind AI | ResilientMindai.com | Joseph C McGinty Jr
-Licensed under the Apache License, Version 2.0
+Proprietary License — All Rights Reserved
 """
 
-__version__ = "1.0.5"
+__version__ = "1.0.8"
 __author__ = "Joseph C McGinty Jr"
 __copyright__ = "Copyright 2026 ResilientMind AI"
-__license__ = "Apache-2.0"
+__license__ = "Proprietary"
 
 # Convenience imports for the public API
 from hammerio.core.router import JobRouter

@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hammerio"
-version = "1.0.5"
+version = "1.0.8"
 description = "GPU-accelerated compression for edge AI. GPU where it matters. CPU where it doesn't."
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = {text = "Proprietary"}
 requires-python = ">=3.10"
 authors = [
     {name = "Joseph C McGinty Jr", email = "Joseph@ResilientMindAI.com"},
@@ -18,7 +18,7 @@ keywords = [
     "hammerio", "resilientmind",
 ]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
+    "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
