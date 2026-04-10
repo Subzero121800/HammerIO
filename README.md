@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://pypi.org/project/hammerio/"><img src="https://img.shields.io/pypi/v/hammerio?style=flat-square&color=blue" alt="PyPI"></a>
   <a href="https://pypi.org/project/hammerio/"><img src="https://img.shields.io/pypi/pyversions/hammerio?style=flat-square" alt="Python"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Proprietary-red?style=flat-square" alt="License"></a>
+  <a href="https://github.com/Subzero121800/HammerIO/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Proprietary-red?style=flat-square" alt="License"></a>
   <a href="#"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Jetson%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/CUDA-12.x-76B900?style=flat-square&logo=nvidia" alt="CUDA"></a>
   <a href="#"><img src="https://img.shields.io/badge/nvCOMP-GPU%20LZ4-76B900?style=flat-square" alt="nvCOMP"></a>
