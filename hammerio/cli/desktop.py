@@ -203,6 +203,24 @@ case "$ACTION" in
             "$([ $ERRORS -eq 0 ] && echo 'emblem-default' || echo 'dialog-warning')"
         ;;
 
+    terminal)
+        # Open a terminal in the selected directory with hammer on PATH
+        DIR="$1"
+        [ -f "$DIR" ] && DIR="$(dirname "$DIR")"
+        [ ! -d "$DIR" ] && DIR="$HOME"
+        if command -v gnome-terminal &>/dev/null; then
+            gnome-terminal --working-directory="$DIR" -- bash -c 'export PATH="$HOME/.local/bin:$PATH"; echo "HammerIO ready — type: hammer --help"; exec bash'
+        elif command -v xfce4-terminal &>/dev/null; then
+            xfce4-terminal --working-directory="$DIR" -e 'bash -c "export PATH=\"$HOME/.local/bin:\$PATH\"; echo \"HammerIO ready — type: hammer --help\"; exec bash"'
+        elif command -v konsole &>/dev/null; then
+            konsole --workdir "$DIR" -e bash -c 'export PATH="$HOME/.local/bin:$PATH"; echo "HammerIO ready — type: hammer --help"; exec bash'
+        elif command -v x-terminal-emulator &>/dev/null; then
+            cd "$DIR" && x-terminal-emulator
+        else
+            notify "HammerIO" "No terminal emulator found" "dialog-error"
+        fi
+        ;;
+
     analyze)
         if [ $TOTAL -gt 1 ]; then
             RESULT="Routing analysis for $TOTAL files:\n\n"
@@ -378,6 +396,7 @@ def install(remove: bool = False) -> None:
             ("HammerIO: Decompress", "decompress"),
             ("HammerIO: Decompress to...", "decompress_to"),
             ("HammerIO: Analyze Route", "analyze"),
+            ("HammerIO: Open Terminal Here", "terminal"),
         ]:
             script = _NAUTILUS_DIR / name
             script.write_text(
@@ -423,6 +442,16 @@ def install(remove: bool = False) -> None:
             f"Extensions=zst;lz4;hammer;gz;bz2\n"
         )
 
+        (_NEMO_DIR / "hammerio-terminal.nemo_action").write_text(
+            f"[Nemo Action]\n"
+            f"Name=HammerIO: Open Terminal Here\n"
+            f"Comment=Open terminal with HammerIO on PATH\n"
+            f"Exec={helper} terminal %F\n"
+            f"Icon-Name=utilities-terminal\n"
+            f"Selection=any\n"
+            f"Extensions=dir\n"
+        )
+
         table.add_row("Nemo (Cinnamon)", "[green]Installed[/green]",
                        "Right-click > HammerIO")
     else:
@@ -465,6 +494,15 @@ def install(remove: bool = False) -> None:
                 f'    <description>Decompress to a chosen folder</description>\n'
                 f'    <patterns>*.zst;*.lz4;*.hammer;*.gz;*.bz2</patterns>\n'
                 f'    <other-files/>\n'
+                f'</action>\n'
+                f'<action>\n'
+                f'    <icon>utilities-terminal</icon>\n'
+                f'    <name>HammerIO: Open Terminal Here</name>\n'
+                f'    <unique-id>hammerio-terminal</unique-id>\n'
+                f'    <command>{helper} terminal %F</command>\n'
+                f'    <description>Open terminal with HammerIO on PATH</description>\n'
+                f'    <patterns>*</patterns>\n'
+                f'    <directories/>\n'
                 f'</action>\n'
             )
             uca = uca.replace("</actions>", actions_xml + "</actions>")
@@ -529,6 +567,7 @@ def install(remove: bool = False) -> None:
     console.print("    [cyan]HammerIO: Compress (GPU)[/cyan]")
     console.print("    [cyan]HammerIO: Decompress[/cyan]")
     console.print("    [cyan]HammerIO: Analyze Route[/cyan]")
+    console.print("    [cyan]HammerIO: Open Terminal Here[/cyan]")
     console.print(f"\n  Uninstall: [dim]hammer install-desktop --remove[/dim]")
     console.print("  You may need to restart your file manager for changes to take effect.")
 
@@ -541,14 +580,14 @@ def _uninstall() -> None:
     removed = 0
 
     # Nautilus scripts
-    for name in ["HammerIO: Compress (GPU)", "HammerIO: Decompress", "HammerIO: Decompress to...", "HammerIO: Analyze Route"]:
+    for name in ["HammerIO: Compress (GPU)", "HammerIO: Decompress", "HammerIO: Decompress to...", "HammerIO: Analyze Route", "HammerIO: Open Terminal Here"]:
         f = _NAUTILUS_DIR / name
         if f.exists():
             f.unlink()
             removed += 1
 
     # Nemo actions
-    for name in ["hammerio-compress.nemo_action", "hammerio-decompress.nemo_action", "hammerio-decompress-to.nemo_action"]:
+    for name in ["hammerio-compress.nemo_action", "hammerio-decompress.nemo_action", "hammerio-decompress-to.nemo_action", "hammerio-terminal.nemo_action"]:
         f = _NEMO_DIR / name
         if f.exists():
             f.unlink()

@@ -161,6 +161,23 @@ case "$ACTION" in
         fi
         ;;
 
+    terminal)
+        DIR="$1"
+        [ -f "$DIR" ] && DIR="$(dirname "$DIR")"
+        [ ! -d "$DIR" ] && DIR="$HOME"
+        if command -v gnome-terminal &>/dev/null; then
+            gnome-terminal --working-directory="$DIR" -- bash -c 'export PATH="$HOME/.local/bin:$PATH"; echo "HammerIO ready — type: hammer --help"; exec bash'
+        elif command -v xfce4-terminal &>/dev/null; then
+            xfce4-terminal --working-directory="$DIR" -e 'bash -c "export PATH=\"$HOME/.local/bin:\$PATH\"; echo \"HammerIO ready — type: hammer --help\"; exec bash"'
+        elif command -v konsole &>/dev/null; then
+            konsole --workdir "$DIR" -e bash -c 'export PATH="$HOME/.local/bin:$PATH"; echo "HammerIO ready — type: hammer --help"; exec bash'
+        elif command -v x-terminal-emulator &>/dev/null; then
+            cd "$DIR" && x-terminal-emulator
+        else
+            notify "HammerIO" "No terminal emulator found" "dialog-error"
+        fi
+        ;;
+
     analyze)
         if [ $TOTAL -gt 1 ]; then
             RESULT="Routing analysis for $TOTAL files:\n\n"

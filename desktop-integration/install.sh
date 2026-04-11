@@ -37,6 +37,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f ~/.local/share/nautilus/scripts/"HammerIO: Compress (GPU)"
     rm -f ~/.local/share/nautilus/scripts/"HammerIO: Decompress"
     rm -f ~/.local/share/nautilus/scripts/"HammerIO: Analyze Route"
+    rm -f ~/.local/share/nautilus/scripts/"HammerIO: Open Terminal Here"
     rm -f ~/.local/share/nemo/actions/hammerio-compress.nemo_action
     rm -f ~/.local/share/nemo/actions/hammerio-decompress.nemo_action
     rm -f ~/.local/share/applications/hammerio-compress.desktop
@@ -196,8 +197,16 @@ EOF
 EOF
     chmod +x "$NAUTILUS_DIR/HammerIO: Analyze Route"
 
-    echo "  Installed 3 Nautilus scripts"
-    echo "  Right-click → Scripts → HammerIO: Compress/Decompress/Analyze"
+    # Open Terminal Here
+    cat > "$NAUTILUS_DIR/HammerIO: Open Terminal Here" << EOF
+#!/usr/bin/env bash
+# HammerIO Terminal — right-click action for Nautilus
+"$HELPER" terminal \$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS
+EOF
+    chmod +x "$NAUTILUS_DIR/HammerIO: Open Terminal Here"
+
+    echo "  Installed 4 Nautilus scripts"
+    echo "  Right-click → Scripts → HammerIO: Compress/Decompress/Analyze/Terminal"
 fi
 
 # ─── Thunar Custom Actions ────────────────────────────────────────────────────
@@ -346,9 +355,10 @@ echo "  Nemo:     Right-click → HammerIO: ..."
 echo "  Any app:  Right-click → Open With → Compress with HammerIO"
 echo ""
 echo "  Supported actions:"
-echo "    • Compress (GPU)  — Auto-routes to fastest encoder"
-echo "    • Decompress      — Handles .zst, .lz4, .gz, .bz2, .hammer"
-echo "    • Analyze Route   — Shows how HammerIO would process the file"
+echo "    • Compress (GPU)     — Auto-routes to fastest encoder"
+echo "    • Decompress         — Handles .zst, .lz4, .gz, .bz2, .hammer"
+echo "    • Analyze Route      — Shows how HammerIO would process the file"
+echo "    • Open Terminal Here  — Opens terminal with HammerIO on PATH"
 echo ""
 echo "  Uninstall: $0 --uninstall"
 echo ""
