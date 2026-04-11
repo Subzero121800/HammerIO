@@ -84,6 +84,30 @@ close_progress() {
     [ -n "$1" ] && kill "$1" 2>/dev/null || true
 }
 
+DASHBOARD_PORT="${HAMMERIO_PORT:-8741}"
+DASHBOARD_URL="http://127.0.0.1:${DASHBOARD_PORT}"
+
+# Post job result to dashboard API so it appears in WebUI logs
+log_to_dashboard() {
+    local action="$1" input="$2" output="$3" in_bytes="$4" out_bytes="$5" elapsed="$6"
+    local ratio="0" savings="0" throughput="0"
+    if [ "$in_bytes" -gt 0 ] 2>/dev/null; then
+        ratio=$(echo "$out_bytes $in_bytes" | awk '{printf "%.2f", $1/$2}')
+        if [ "$action" = "compress" ]; then
+            savings=$(echo "$in_bytes $out_bytes" | awk '{printf "%.1f", (1-$2/$1)*100}')
+        fi
+    fi
+    if [ "$(echo "$elapsed" | awk '{print ($1 > 0)}')" = "1" ] 2>/dev/null; then
+        throughput=$(echo "$in_bytes $elapsed" | awk '{printf "%.1f", $1/$2/1048576}')
+    fi
+    if command -v curl &>/dev/null; then
+        curl -s -X POST "${DASHBOARD_URL}/api/jobs/log" \
+            -H "Content-Type: application/json" \
+            -d "{\"input_path\":\"${input}\",\"output_path\":\"${output}\",\"input_size\":${in_bytes:-0},\"output_size\":${out_bytes:-0},\"ratio\":${ratio},\"savings_pct\":${savings},\"elapsed_s\":${elapsed:-0},\"throughput_mbps\":${throughput},\"processor\":\"${action}\",\"algorithm\":\"auto\",\"reason\":\"Right-click action\",\"status\":\"completed\"}" \
+            --connect-timeout 2 --max-time 5 > /dev/null 2>&1 || true
+    fi
+}
+
 TOTAL=$#
 
 case "$ACTION" in
@@ -106,15 +130,20 @@ case "$ACTION" in
                 FILE_LIST+=("$(basename "$FILE")")
             done
 
+            START_TIME=$(date +%s.%N)
             if tar -cf "$TAR_FILE" -C "$PARENT_DIR" "${FILE_LIST[@]}" >> "$LOG" 2>&1; then
                 TAR_SIZE=$(du -sh "$TAR_FILE" 2>/dev/null | cut -f1)
+                IN_BYTES=$(stat -c%s "$TAR_FILE" 2>/dev/null || echo 0)
                 if hammer compress "$TAR_FILE" --quality balanced >> "$LOG" 2>&1; then
                     rm -f "$TAR_FILE"
                     for ext in .zst .lz4 .gz; do
                         if [ -f "${TAR_FILE}${ext}" ]; then OUTPUT="${TAR_FILE}${ext}"; break; fi
                     done
+                    OUT_BYTES=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
+                    ELAPSED=$(echo "$(date +%s.%N) $START_TIME" | awk '{printf "%.2f", $1-$2}')
                     OUT_SIZE=$(du -sh "$OUTPUT" 2>/dev/null | cut -f1)
                     notify "HammerIO" "Archive created: $(basename "$OUTPUT")\n${TOTAL} files: ${TAR_SIZE} -> ${OUT_SIZE}" "emblem-default"
+                    log_to_dashboard "compress" "$TAR_FILE" "$OUTPUT" "$IN_BYTES" "$OUT_BYTES" "$ELAPSED"
                 else
                     rm -f "$TAR_FILE"
                     notify "HammerIO" "Compression failed\nCheck $LOG" "dialog-error"
@@ -130,14 +159,19 @@ case "$ACTION" in
             BASENAME="$(basename "$FILE")"
             notify "HammerIO" "Compressing: $BASENAME" "utilities-file-archiver"
             PID=$(show_progress "Compressing $BASENAME...")
+            IN_BYTES=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            START_TIME=$(date +%s.%N)
             if hammer compress "$FILE" --quality balanced >> "$LOG" 2>&1; then
                 OUTPUT="$FILE.zst"
                 for ext in .zst .lz4 .gz .bz2; do
                     if [ -f "${FILE}${ext}" ]; then OUTPUT="${FILE}${ext}"; break; fi
                 done
+                OUT_BYTES=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
+                ELAPSED=$(echo "$(date +%s.%N) $START_TIME" | awk '{printf "%.2f", $1-$2}')
                 OUTSIZE=$(du -sh "$OUTPUT" 2>/dev/null | cut -f1)
                 INSIZE=$(du -sh "$FILE" 2>/dev/null | cut -f1)
                 notify "HammerIO" "Done: $BASENAME\n$INSIZE -> $OUTSIZE" "emblem-default"
+                log_to_dashboard "compress" "$FILE" "$OUTPUT" "$IN_BYTES" "$OUT_BYTES" "$ELAPSED"
             else
                 notify "HammerIO" "Failed: $BASENAME\nCheck $LOG" "dialog-error"
             fi
@@ -152,16 +186,22 @@ case "$ACTION" in
             BASENAME="$(basename "$FILE")"
             notify "HammerIO" "Decompressing: $BASENAME" "utilities-file-archiver"
             PID=$(show_progress "Decompressing $BASENAME...")
+            IN_BYTES=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            START_TIME=$(date +%s.%N)
             if hammer decompress "$FILE" >> "$LOG" 2>&1; then
                 DONE=$((DONE + 1))
                 DECOMPRESSED="${FILE%.zst}"; DECOMPRESSED="${DECOMPRESSED%.lz4}"; DECOMPRESSED="${DECOMPRESSED%.gz}"
                 if [ -f "$DECOMPRESSED" ] && [[ "$DECOMPRESSED" == *.tar ]]; then
                     EXTRACT_DIR="$(dirname "$DECOMPRESSED")"
+                    OUT_BYTES=$(stat -c%s "$DECOMPRESSED" 2>/dev/null || echo 0)
                     tar -xf "$DECOMPRESSED" -C "$EXTRACT_DIR" >> "$LOG" 2>&1 && rm -f "$DECOMPRESSED"
                     notify "HammerIO" "Extracted: $BASENAME -> $EXTRACT_DIR" "emblem-default"
                 else
+                    OUT_BYTES=$(stat -c%s "$DECOMPRESSED" 2>/dev/null || echo 0)
                     notify "HammerIO" "Decompressed: $BASENAME" "emblem-default"
                 fi
+                ELAPSED=$(echo "$(date +%s.%N) $START_TIME" | awk '{printf "%.2f", $1-$2}')
+                log_to_dashboard "decompress" "$FILE" "${DECOMPRESSED:-$FILE}" "$IN_BYTES" "${OUT_BYTES:-0}" "$ELAPSED"
             else
                 ERRORS=$((ERRORS + 1))
                 notify "HammerIO" "Failed: $BASENAME\nCheck $LOG" "dialog-error"

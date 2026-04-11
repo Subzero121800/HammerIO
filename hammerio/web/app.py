@@ -392,6 +392,32 @@ def _register_routes(app: Flask) -> None:
         _save_job_history()
         return jsonify({"status": "cleared", "scope": scope, "remaining": len(_job_history)})
 
+    @app.route("/api/jobs/log", methods=["POST"])
+    def api_jobs_log() -> Any:
+        """Log an externally completed job (from CLI, right-click actions, etc)."""
+        data = request.json or {}
+        if not data.get("input_path"):
+            return jsonify({"error": "input_path required"}), 400
+        entry = {
+            "input_path": data.get("input_path", ""),
+            "output_path": data.get("output_path", ""),
+            "input_size": data.get("input_size", 0),
+            "output_size": data.get("output_size", 0),
+            "ratio": data.get("ratio", 0),
+            "savings_pct": data.get("savings_pct", 0),
+            "elapsed_s": data.get("elapsed_s", 0),
+            "throughput_mbps": data.get("throughput_mbps", 0),
+            "processor": data.get("processor", "cli"),
+            "algorithm": data.get("algorithm", ""),
+            "reason": data.get("reason", "Right-click action"),
+            "status": data.get("status", "completed"),
+            "timestamp": data.get("timestamp", time.strftime("%Y-%m-%d %H:%M:%S")),
+        }
+        _job_history.append(entry)
+        _save_job_history()
+        socketio.emit("job_complete", entry)
+        return jsonify({"status": "logged"})
+
     @app.route("/api/compress", methods=["POST"])
     def api_compress() -> Any:
         data = request.json or {}
@@ -708,6 +734,7 @@ DASHBOARD_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Cpath d='M8 8v16M24 8v16M8 16h16' stroke='%2339d2c0' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='10' r='2.5' fill='%233fb950'/%3E%3C/svg%3E">
     <meta http-equiv="Pragma" content="no-cache">
     <title>HammerIO Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js" async></script>
@@ -2209,6 +2236,7 @@ CONSOLE_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Cpath d='M8 8v16M24 8v16M8 16h16' stroke='%2339d2c0' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='10' r='2.5' fill='%233fb950'/%3E%3C/svg%3E">
     <title>HammerIO Console</title>
     <style>
         :root {

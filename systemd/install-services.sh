@@ -85,9 +85,6 @@ install_dashboard() {
         VENV_PYTHON="/usr/bin/python3"
     fi
 
-    # Find the start script
-    START_SCRIPT="$PROJECT_DIR/start_webui.py"
-
     # Detect the user who owns the project
     OWNER=$(stat -c '%U' "$PROJECT_DIR" 2>/dev/null || echo "root")
 
@@ -96,7 +93,7 @@ install_dashboard() {
 # Copyright 2026 ResilientMind AI | Joseph C McGinty Jr
 #
 # Starts the web dashboard on boot with auto-restart.
-# Access: http://localhost:5000
+# Access: http://localhost:8741
 
 [Unit]
 Description=HammerIO Web Dashboard
@@ -115,7 +112,7 @@ Environment=EGL_LOG_LEVEL=fatal
 Environment=PYTHONUNBUFFERED=1
 
 # Start the dashboard
-ExecStart=$VENV_PYTHON $START_SCRIPT --host 0.0.0.0 --port 5000
+ExecStart=$VENV_PYTHON -m hammerio.cli.main webui --host 0.0.0.0 --port 8741
 
 # Auto-restart on any failure
 Restart=always
@@ -143,7 +140,7 @@ EOF
     echo "  Created: /etc/systemd/system/hammerio-dashboard.service"
     echo "  User: $OWNER"
     echo "  Python: $VENV_PYTHON"
-    echo "  Port: 5000"
+    echo "  Port: 8741"
 }
 
 # ─── HammerIO Watch Daemon service ───────────────────────────────────────────
