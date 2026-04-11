@@ -120,8 +120,7 @@ RestartSec=5s
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
-# Watchdog: restart if unresponsive for 60s
-WatchdogSec=60s
+# No watchdog — Flask doesn't send sd_notify heartbeats
 
 # Resource limits
 MemoryMax=512M
