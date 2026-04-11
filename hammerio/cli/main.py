@@ -653,7 +653,7 @@ def webui(
         console.print(f"  Health:  http://{host}:{port}/health")
         console.print(f"  API:     http://{host}:{port}/api/hardware")
         console.print("[dim]Press Ctrl+C to stop.[/dim]")
-        socketio.run(app_instance, host=host, port=port, debug=debug)
+        socketio.run(app_instance, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
     except ImportError as e:
         console.print(f"[red]Web dependencies missing:[/red] pip install hammerio[web]\n{e}")
         raise typer.Exit(1)

@@ -409,18 +409,21 @@ def _register_routes(app: Flask) -> None:
             job = router.route(input_path, output_path, mode=mode if mode != "auto" else None)
             result = router.execute(job)
 
+            savings = (1 - result.output_size / result.input_size) * 100 if result.input_size > 0 else 0
             result_dict = {
                 "input_path": result.input_path,
                 "output_path": result.output_path,
                 "input_size": result.input_size,
                 "output_size": result.output_size,
                 "ratio": result.compression_ratio,
+                "savings_pct": round(savings, 1),
                 "elapsed_s": result.elapsed_seconds,
                 "throughput_mbps": result.throughput_mbps,
                 "processor": result.processor_used,
                 "algorithm": result.algorithm,
                 "reason": result.routing_reason,
                 "status": result.status.value,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
             _job_history.append(result_dict)
             _save_job_history()
@@ -460,16 +463,26 @@ def _register_routes(app: Flask) -> None:
                 return jsonify({"error": f"Unknown compressed format: {ext}"}), 400
 
             elapsed = _t.time() - start
+            in_size = input_p.stat().st_size
             out_size = Path(out).stat().st_size if Path(out).exists() else 0
+            throughput = (out_size / elapsed / (1024 * 1024)) if elapsed > 0 else 0
+            expansion = out_size / in_size if in_size > 0 else 0
             result_dict = {
                 "input_path": str(input_p),
                 "output_path": out,
-                "input_size": input_p.stat().st_size,
+                "input_size": in_size,
                 "output_size": out_size,
+                "ratio": round(expansion, 2),
+                "savings_pct": 0,
                 "elapsed_s": round(elapsed, 3),
+                "throughput_mbps": round(throughput, 1),
+                "processor": "decompress",
+                "algorithm": ext.lstrip("."),
+                "reason": "Decompression",
                 "status": "completed",
+                "timestamp": _t.strftime("%Y-%m-%d %H:%M:%S"),
             }
-            _job_history.append({**result_dict, "processor": "decompress", "algorithm": ext, "ratio": 0, "reason": "Decompression"})
+            _job_history.append(result_dict)
             _save_job_history()
             return jsonify(result_dict)
         except Exception as e:
@@ -1234,6 +1247,29 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
+        <!-- Compression Stats Summary -->
+        <div class="card full-width" id="stats-card">
+            <h2 onclick="toggleSection('stats-section')" style="cursor:pointer">
+                <span id="stats-section-arrow">&#9660;</span> Compression Stats
+            </h2>
+            <div id="stats-section" style="">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
+                    <div class="metric"><span class="label">Total Jobs</span><span class="value" id="stat-total">0</span></div>
+                    <div class="metric"><span class="label">Compressed</span><span class="value" id="stat-compress">0</span></div>
+                    <div class="metric"><span class="label">Decompressed</span><span class="value" id="stat-decompress">0</span></div>
+                    <div class="metric"><span class="label">Total Input</span><span class="value" id="stat-input-size">0 B</span></div>
+                    <div class="metric"><span class="label">Total Output</span><span class="value" id="stat-output-size">0 B</span></div>
+                    <div class="metric"><span class="label">Space Saved</span><span class="value" style="color:var(--accent-green)" id="stat-saved">0 B</span></div>
+                    <div class="metric"><span class="label">Avg Ratio</span><span class="value" id="stat-avg-ratio">-</span></div>
+                    <div class="metric"><span class="label">Avg Savings</span><span class="value" style="color:var(--accent-green)" id="stat-avg-savings">-</span></div>
+                    <div class="metric"><span class="label">Avg Throughput</span><span class="value" id="stat-avg-speed">-</span></div>
+                    <div class="metric"><span class="label">Total Time</span><span class="value" id="stat-total-time">0s</span></div>
+                    <div class="metric"><span class="label">GPU Jobs</span><span class="value" style="color:var(--accent-cyan)" id="stat-gpu">0</span></div>
+                    <div class="metric"><span class="label">CPU Jobs</span><span class="value" id="stat-cpu">0</span></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Recent Jobs (collapsible) -->
         <div class="card full-width">
             <h2 onclick="toggleSection('recent-jobs')" style="cursor:pointer">
@@ -1246,8 +1282,8 @@ DASHBOARD_HTML = """
             <div id="recent-jobs" style="">
                 <table class="job-table">
                     <thead><tr>
-                        <th>File</th><th>Input</th><th>Output</th><th>Ratio</th>
-                        <th>Time</th><th>Speed</th><th>Processor</th><th>Status</th>
+                        <th>File</th><th>Input</th><th>Output</th><th>Ratio</th><th>Savings</th>
+                        <th>Time</th><th>Speed</th><th>Processor</th><th>Algorithm</th><th>Status</th><th>When</th>
                     </tr></thead>
                     <tbody id="job-tbody"></tbody>
                 </table>
@@ -1266,8 +1302,8 @@ DASHBOARD_HTML = """
             <div id="all-jobs" style="display:none">
                 <table class="job-table">
                     <thead><tr>
-                        <th>File</th><th>Input</th><th>Output</th><th>Ratio</th>
-                        <th>Time</th><th>Speed</th><th>Processor</th><th>Status</th>
+                        <th>File</th><th>Input</th><th>Output</th><th>Ratio</th><th>Savings</th>
+                        <th>Time</th><th>Speed</th><th>Processor</th><th>Algorithm</th><th>Status</th><th>When</th>
                     </tr></thead>
                     <tbody id="all-job-tbody"></tbody>
                 </table>
@@ -1658,15 +1694,21 @@ DASHBOARD_HTML = """
 
         function makeJobRow(data) {
             const filename = data.input_path ? data.input_path.split('/').pop() : '?';
+            const savings = data.savings_pct != null ? data.savings_pct.toFixed(1) + '%' : (data.input_size && data.output_size && data.processor !== 'decompress' ? ((1 - data.output_size / data.input_size) * 100).toFixed(1) + '%' : '-');
+            const savingsColor = data.processor === 'decompress' ? 'var(--accent-blue)' : (parseFloat(savings) > 0 ? 'var(--accent-green)' : 'var(--text-secondary)');
+            const when = data.timestamp || '-';
             return '<tr>' +
-                '<td>' + esc(filename) + '</td>' +
+                '<td title="' + esc(data.input_path || '') + '">' + esc(filename) + '</td>' +
                 '<td>' + formatBytes(data.input_size || 0) + '</td>' +
                 '<td>' + formatBytes(data.output_size || 0) + '</td>' +
                 '<td>' + (data.ratio ? data.ratio.toFixed(2) + 'x' : '-') + '</td>' +
+                '<td style="color:' + savingsColor + '">' + savings + '</td>' +
                 '<td>' + (data.elapsed_s ? data.elapsed_s.toFixed(2) + 's' : '-') + '</td>' +
                 '<td>' + (data.throughput_mbps ? data.throughput_mbps.toFixed(1) + ' MB/s' : '-') + '</td>' +
                 '<td style="color:#3fb950">' + esc(data.processor || '-') + '</td>' +
+                '<td>' + esc(data.algorithm || '-') + '</td>' +
                 '<td>' + esc(data.status || '-') + '</td>' +
+                '<td style="color:var(--text-secondary);font-size:11px">' + esc(when) + '</td>' +
                 '</tr>';
         }
 
@@ -1677,6 +1719,8 @@ DASHBOARD_HTML = """
             // Also add to all-jobs
             const allTbody = document.getElementById('all-job-tbody');
             allTbody.insertAdjacentHTML('afterbegin', makeJobRow(data));
+            // Refresh stats
+            fetch('/api/jobs/all').then(r => r.json()).then(updateStats);
         }
 
         function toggleSection(id) {
@@ -1805,6 +1849,36 @@ DASHBOARD_HTML = """
             document.getElementById('total-power').textContent = (jtop.power?.total_mw || 0).toFixed(0) + ' mW';
         }).catch(() => {});
 
+        function updateStats(jobs) {
+            const compress = jobs.filter(j => j.processor !== 'decompress');
+            const decomp = jobs.filter(j => j.processor === 'decompress');
+            const totalIn = compress.reduce((s, j) => s + (j.input_size || 0), 0);
+            const totalOut = compress.reduce((s, j) => s + (j.output_size || 0), 0);
+            const saved = totalIn - totalOut;
+            const ratios = compress.filter(j => j.ratio > 0).map(j => j.ratio);
+            const avgRatio = ratios.length ? (ratios.reduce((a, b) => a + b, 0) / ratios.length) : 0;
+            const savingsPcts = compress.filter(j => j.input_size > 0).map(j => (1 - j.output_size / j.input_size) * 100);
+            const avgSavings = savingsPcts.length ? (savingsPcts.reduce((a, b) => a + b, 0) / savingsPcts.length) : 0;
+            const speeds = jobs.filter(j => j.throughput_mbps > 0).map(j => j.throughput_mbps);
+            const avgSpeed = speeds.length ? (speeds.reduce((a, b) => a + b, 0) / speeds.length) : 0;
+            const totalTime = jobs.reduce((s, j) => s + (j.elapsed_s || 0), 0);
+            const gpuJobs = jobs.filter(j => (j.processor || '').toLowerCase().includes('gpu') || (j.processor || '').toLowerCase().includes('nvcomp')).length;
+            const cpuJobs = jobs.filter(j => j.processor !== 'decompress' && !((j.processor || '').toLowerCase().includes('gpu') || (j.processor || '').toLowerCase().includes('nvcomp'))).length;
+
+            document.getElementById('stat-total').textContent = jobs.length;
+            document.getElementById('stat-compress').textContent = compress.length;
+            document.getElementById('stat-decompress').textContent = decomp.length;
+            document.getElementById('stat-input-size').textContent = formatBytes(totalIn);
+            document.getElementById('stat-output-size').textContent = formatBytes(totalOut);
+            document.getElementById('stat-saved').textContent = formatBytes(Math.max(0, saved));
+            document.getElementById('stat-avg-ratio').textContent = avgRatio > 0 ? avgRatio.toFixed(2) + 'x' : '-';
+            document.getElementById('stat-avg-savings').textContent = avgSavings > 0 ? avgSavings.toFixed(1) + '%' : '-';
+            document.getElementById('stat-avg-speed').textContent = avgSpeed > 0 ? avgSpeed.toFixed(1) + ' MB/s' : '-';
+            document.getElementById('stat-total-time').textContent = totalTime > 60 ? (totalTime / 60).toFixed(1) + 'm' : totalTime.toFixed(1) + 's';
+            document.getElementById('stat-gpu').textContent = gpuJobs;
+            document.getElementById('stat-cpu').textContent = cpuJobs;
+        }
+
         // Fetch existing jobs on load — recent (last 100) + all
         fetch('/api/jobs').then(r => r.json()).then(jobs => {
             jobs.reverse().forEach(j => {
@@ -1816,6 +1890,7 @@ DASHBOARD_HTML = """
             jobs.reverse().forEach(j => {
                 allTbody.insertAdjacentHTML('beforeend', makeJobRow(j));
             });
+            updateStats(jobs);
         });
 
         // ─── Polling — refresh telemetry every 2 seconds ─────────────────
